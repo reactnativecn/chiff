@@ -1,8 +1,9 @@
 use crate::{
-    parse_artifact, select_engine, EngineKind, HermesFunctionInfoBlock, HermesSection,
-    HermesSectionKind,
+    can_use_structured_hermes, detect_input_format, parse_artifact, select_engine, EngineKind,
+    HermesDebugDataStream, HermesDebugInfoLayout, HermesFunctionInfoBlock, HermesSection,
+    HermesSectionKind, InputFormat,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 const HERMES_HEADER_LEN: usize = 128;
 const RESYNC_ANCHOR_WINDOW: usize = 4;
@@ -135,6 +136,23 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
         return Some(diff_generic_bytes(old, new));
     }
 
+    match (detect_input_format(old), detect_input_format(new)) {
+        (
+            InputFormat::HermesBytecode {
+                version: old_version,
+                form: old_form,
+            },
+            InputFormat::HermesBytecode {
+                version: new_version,
+                form: new_form,
+            },
+        ) if old_version == new_version
+            && old_form == new_form
+            && can_use_structured_hermes(old)
+            && can_use_structured_hermes(new) => {}
+        _ => return None,
+    }
+
     let old_artifact = parse_artifact(old)?;
     let new_artifact = parse_artifact(new)?;
 
@@ -251,13 +269,22 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
         );
     }
 
-    append_region_diff(
-        &mut ops,
-        old,
-        new,
-        old_artifact.header.debug_info_offset as usize..old_artifact.header.file_length as usize,
-        new_artifact.header.debug_info_offset as usize..new_artifact.header.file_length as usize,
-    );
+    if let (Some(old_debug), Some(new_debug)) = (
+        old_artifact.debug_info_layout.as_ref(),
+        new_artifact.debug_info_layout.as_ref(),
+    ) {
+        append_debug_info_diff(&mut ops, old, new, old_debug, new_debug);
+    } else {
+        append_region_diff(
+            &mut ops,
+            old,
+            new,
+            old_artifact.header.debug_info_offset as usize
+                ..old_artifact.header.file_length as usize,
+            new_artifact.header.debug_info_offset as usize
+                ..new_artifact.header.file_length as usize,
+        );
+    }
 
     if ops.is_empty() {
         ops.push(PatchOp::Insert(new.to_vec()));
@@ -343,6 +370,93 @@ fn append_info_block_diff(
         old_ranges.trailing_padding,
         new_ranges.trailing_padding,
     );
+}
+
+fn append_debug_info_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_debug: &HermesDebugInfoLayout,
+    new_debug: &HermesDebugInfoLayout,
+) {
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_debug.header_offset as usize..old_debug.header_end_offset as usize,
+        new_debug.header_offset as usize..new_debug.header_end_offset as usize,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_debug.filename_table_offset as usize..old_debug.filename_table_end_offset as usize,
+        new_debug.filename_table_offset as usize..new_debug.filename_table_end_offset as usize,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_debug.filename_storage_offset as usize..old_debug.filename_storage_end_offset as usize,
+        new_debug.filename_storage_offset as usize..new_debug.filename_storage_end_offset as usize,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_debug.file_regions_offset as usize..old_debug.file_regions_end_offset as usize,
+        new_debug.file_regions_offset as usize..new_debug.file_regions_end_offset as usize,
+    );
+    append_debug_data_diff(ops, old, new, old_debug, new_debug);
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_debug.debug_data_end_offset as usize..old_debug.end_offset as usize,
+        new_debug.debug_data_end_offset as usize..new_debug.end_offset as usize,
+    );
+}
+
+fn append_debug_data_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_debug: &HermesDebugInfoLayout,
+    new_debug: &HermesDebugInfoLayout,
+) {
+    if old_debug.streams.is_empty() && new_debug.streams.is_empty() {
+        append_region_diff(
+            ops,
+            old,
+            new,
+            old_debug.debug_data_offset as usize..old_debug.debug_data_end_offset as usize,
+            new_debug.debug_data_offset as usize..new_debug.debug_data_end_offset as usize,
+        );
+        return;
+    }
+
+    let mut old_streams_by_function = HashMap::<u32, VecDeque<&HermesDebugDataStream>>::new();
+    for stream in &old_debug.streams {
+        old_streams_by_function
+            .entry(stream.function_index)
+            .or_default()
+            .push_back(stream);
+    }
+
+    for stream in &new_debug.streams {
+        let old_stream = old_streams_by_function
+            .get_mut(&stream.function_index)
+            .and_then(VecDeque::pop_front);
+        append_region_diff(
+            ops,
+            old,
+            new,
+            old_stream
+                .map(|candidate| candidate.offset as usize..candidate.end_offset as usize)
+                .unwrap_or(0..0),
+            stream.offset as usize..stream.end_offset as usize,
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -551,9 +665,7 @@ fn find_section_range(
         .map(|(_, range)| range.clone())
 }
 
-fn unique_function_body_ranges(
-    functions: &[crate::HermesFunction],
-) -> Vec<std::ops::Range<usize>> {
+fn unique_function_body_ranges(functions: &[crate::HermesFunction]) -> Vec<std::ops::Range<usize>> {
     let mut ranges = functions
         .iter()
         .map(|function| function.bytecode_offset as usize..function.body_end_offset as usize)

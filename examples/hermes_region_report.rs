@@ -1,4 +1,7 @@
-use chiff::{parse_artifact, HermesFunctionInfoBlock, HermesSectionKind};
+use chiff::{
+    parse_artifact, HermesDebugDataStream, HermesDebugInfoLayout, HermesFunctionInfoBlock,
+    HermesSectionKind,
+};
 use std::{env, fs, process};
 
 const HEADER_LEN: usize = 128;
@@ -69,7 +72,14 @@ fn main() {
         "function_layout={}",
         old_artifact.function_layout.is_some() && new_artifact.function_layout.is_some()
     );
-    print_delta("header", region_delta(&old[..HEADER_LEN], &new[..HEADER_LEN]));
+    println!(
+        "debug_info_layout={}",
+        old_artifact.debug_info_layout.is_some() && new_artifact.debug_info_layout.is_some()
+    );
+    print_delta(
+        "header",
+        region_delta(&old[..HEADER_LEN], &new[..HEADER_LEN]),
+    );
 
     println!();
     println!("sections");
@@ -85,6 +95,75 @@ fn main() {
 
         let delta = region_delta(&old[old_range], &new[new_range]);
         print_delta(section_kind_name(section.kind), delta);
+    }
+
+    if let (Some(old_debug), Some(new_debug)) = (
+        old_artifact.debug_info_layout.as_ref(),
+        new_artifact.debug_info_layout.as_ref(),
+    ) {
+        println!();
+        println!("debug_info_layout");
+        print_delta(
+            "debug_header",
+            region_delta(
+                &old[old_debug.header_offset as usize..old_debug.header_end_offset as usize],
+                &new[new_debug.header_offset as usize..new_debug.header_end_offset as usize],
+            ),
+        );
+        print_delta(
+            "debug_filename_table",
+            region_delta(
+                &old[old_debug.filename_table_offset as usize
+                    ..old_debug.filename_table_end_offset as usize],
+                &new[new_debug.filename_table_offset as usize
+                    ..new_debug.filename_table_end_offset as usize],
+            ),
+        );
+        print_delta(
+            "debug_filename_storage",
+            region_delta(
+                &old[old_debug.filename_storage_offset as usize
+                    ..old_debug.filename_storage_end_offset as usize],
+                &new[new_debug.filename_storage_offset as usize
+                    ..new_debug.filename_storage_end_offset as usize],
+            ),
+        );
+        print_delta(
+            "debug_file_regions",
+            region_delta(
+                &old[old_debug.file_regions_offset as usize
+                    ..old_debug.file_regions_end_offset as usize],
+                &new[new_debug.file_regions_offset as usize
+                    ..new_debug.file_regions_end_offset as usize],
+            ),
+        );
+        print_delta(
+            "debug_data",
+            region_delta(
+                &old[old_debug.debug_data_offset as usize
+                    ..old_debug.debug_data_end_offset as usize],
+                &new[new_debug.debug_data_offset as usize
+                    ..new_debug.debug_data_end_offset as usize],
+            ),
+        );
+        print_delta(
+            "debug_trailing_bytes",
+            region_delta(
+                &old[old_debug.debug_data_end_offset as usize..old_debug.end_offset as usize],
+                &new[new_debug.debug_data_end_offset as usize..new_debug.end_offset as usize],
+            ),
+        );
+
+        println!();
+        println!("top changed debug streams");
+        let mut streams = Vec::new();
+        for (label, delta) in changed_debug_streams(&old, &new, old_debug, new_debug) {
+            streams.push((label, delta));
+        }
+        streams.sort_by_key(|(_, delta)| std::cmp::Reverse(delta.changed_span()));
+        for (label, delta) in streams.into_iter().take(10) {
+            print_delta(&label, delta);
+        }
     }
 
     if let (Some(old_functions), Some(new_functions)) = (
@@ -124,16 +203,24 @@ fn main() {
         println!();
         println!("top changed functions");
         let mut functions = Vec::new();
-        for index in 0..old_functions.functions.len().max(new_functions.functions.len()) {
+        for index in 0..old_functions
+            .functions
+            .len()
+            .max(new_functions.functions.len())
+        {
             let old_range = old_functions
                 .functions
                 .get(index)
-                .map(|function| function.bytecode_offset as usize..function.body_end_offset as usize)
+                .map(|function| {
+                    function.bytecode_offset as usize..function.body_end_offset as usize
+                })
                 .unwrap_or(0..0);
             let new_range = new_functions
                 .functions
                 .get(index)
-                .map(|function| function.bytecode_offset as usize..function.body_end_offset as usize)
+                .map(|function| {
+                    function.bytecode_offset as usize..function.body_end_offset as usize
+                })
                 .unwrap_or(0..0);
             let delta = region_delta(&old[old_range], &new[new_range]);
             if delta.changed_span() > 0 {
@@ -207,6 +294,47 @@ fn region_delta_for_info_block(
         .unwrap_or(0..0);
     let new_range = new_block
         .map(|block| block.offset as usize..block.end_offset as usize)
+        .unwrap_or(0..0);
+    region_delta(&old[old_range], &new[new_range])
+}
+
+fn changed_debug_streams(
+    old: &[u8],
+    new: &[u8],
+    old_debug: &HermesDebugInfoLayout,
+    new_debug: &HermesDebugInfoLayout,
+) -> Vec<(String, RegionDelta)> {
+    let mut old_by_function = std::collections::HashMap::new();
+    for stream in &old_debug.streams {
+        old_by_function.insert(stream.function_index, stream);
+    }
+
+    let mut streams = Vec::new();
+    for stream in &new_debug.streams {
+        let delta = region_delta_for_debug_stream(
+            old,
+            new,
+            old_by_function.get(&stream.function_index).copied(),
+            Some(stream),
+        );
+        if delta.changed_span() > 0 {
+            streams.push((format!("debug_stream[{}]", stream.function_index), delta));
+        }
+    }
+    streams
+}
+
+fn region_delta_for_debug_stream(
+    old: &[u8],
+    new: &[u8],
+    old_stream: Option<&HermesDebugDataStream>,
+    new_stream: Option<&HermesDebugDataStream>,
+) -> RegionDelta {
+    let old_range = old_stream
+        .map(|stream| stream.offset as usize..stream.end_offset as usize)
+        .unwrap_or(0..0);
+    let new_range = new_stream
+        .map(|stream| stream.offset as usize..stream.end_offset as usize)
         .unwrap_or(0..0);
     region_delta(&old[old_range], &new[new_range])
 }

@@ -58,11 +58,11 @@
       "inserted_bytes": 2
     },
     "hermes": {
-      "op_count": 18,
-      "copy_op_count": 10,
-      "insert_op_count": 8,
-      "copied_bytes": 2670957,
-      "inserted_bytes": 26511
+      "op_count": 12,
+      "copy_op_count": 6,
+      "insert_op_count": 6,
+      "copied_bytes": 2697407,
+      "inserted_bytes": 61
     }
   },
   "current_findings": {
@@ -70,7 +70,11 @@
     "function_bodies_changed": false,
     "string_storage_changed_old_bytes": 1,
     "string_storage_changed_new_bytes": 1,
-    "debug_info_changed_old_bytes": 430293,
-    "debug_info_changed_new_bytes": 430300
+    "debug_data_changed_old_bytes": 0,
+    "debug_data_changed_new_bytes": 0,
+    "debug_filename_storage_changed_old_bytes": 10,
+    "debug_filename_storage_changed_new_bytes": 17,
+    "debug_trailing_bytes_changed_old_bytes": 20,
+    "debug_trailing_bytes_changed_new_bytes": 20
   }
 }

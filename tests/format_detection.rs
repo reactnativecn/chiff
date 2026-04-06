@@ -1,7 +1,9 @@
 use chiff::engine::{select_engine, EngineKind};
 use chiff::format::{detect_input_format, HermesForm, InputFormat};
 use chiff::hermes::{
-    parse_artifact, parse_function_layout, parse_header, parse_section_layout, HermesArtifact,
+    can_use_structured_hermes, parse_artifact, parse_debug_info_layout, parse_function_layout,
+    parse_header, parse_section_layout, supports_structured_hermes_version, HermesArtifact,
+    HermesDebugDataStream, HermesDebugFileRegion, HermesDebugInfoHeader, HermesDebugInfoLayout,
     HermesFunction, HermesFunctionInfoBlock, HermesFunctionLayout, HermesHeader, HermesSection,
     HermesSectionKind, HermesSectionLayout,
 };
@@ -99,6 +101,90 @@ fn hermes_header_bytes(spec: HeaderSpec) -> Vec<u8> {
     bytes[104..108].copy_from_slice(&spec.function_source_count.to_le_bytes());
     bytes[108..112].copy_from_slice(&spec.debug_info_offset.to_le_bytes());
     bytes[112] = spec.options_flags;
+    bytes
+}
+
+fn append_signed_leb128(output: &mut Vec<u8>, mut value: i64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+
+        let done = (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0);
+        if done {
+            output.push(byte);
+            break;
+        }
+
+        output.push(byte | 0x80);
+    }
+}
+
+fn hermes_header_with_debug_info_bytes() -> Vec<u8> {
+    const FOOTER_LEN: usize = 20;
+    const DEBUG_INFO_OFFSET: usize = 128;
+    const DEBUG_INFO_HEADER_LEN: usize = 16;
+    const FILENAME_TABLE_LEN: usize = 8;
+    const FILENAME_STORAGE_LEN: usize = 4;
+    const FILE_REGION_LEN: usize = 12;
+
+    let mut debug_data = Vec::new();
+    let first_stream_offset = 0usize;
+    append_signed_leb128(&mut debug_data, 7);
+    append_signed_leb128(&mut debug_data, 10);
+    append_signed_leb128(&mut debug_data, 3);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, 1);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, -1);
+
+    let second_stream_offset = debug_data.len();
+    append_signed_leb128(&mut debug_data, 11);
+    append_signed_leb128(&mut debug_data, 20);
+    append_signed_leb128(&mut debug_data, 4);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, 2);
+    append_signed_leb128(&mut debug_data, 1);
+    append_signed_leb128(&mut debug_data, 1);
+    append_signed_leb128(&mut debug_data, -1);
+
+    let file_length = DEBUG_INFO_OFFSET
+        + DEBUG_INFO_HEADER_LEN
+        + FILENAME_TABLE_LEN
+        + FILENAME_STORAGE_LEN
+        + FILE_REGION_LEN
+        + debug_data.len()
+        + FOOTER_LEN;
+    let mut bytes = hermes_header_bytes(HeaderSpec {
+        file_length: file_length as u32,
+        debug_info_offset: DEBUG_INFO_OFFSET as u32,
+        ..HeaderSpec::default()
+    });
+
+    bytes.resize(file_length, 0);
+    let mut cursor = DEBUG_INFO_OFFSET;
+    bytes[cursor..cursor + 4].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&(FILENAME_STORAGE_LEN as u32).to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 12..cursor + 16].copy_from_slice(&(debug_data.len() as u32).to_le_bytes());
+    cursor += DEBUG_INFO_HEADER_LEN;
+
+    bytes[cursor..cursor + 4].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&4u32.to_le_bytes());
+    cursor += FILENAME_TABLE_LEN;
+
+    bytes[cursor..cursor + 4].copy_from_slice(b"app\0");
+    cursor += FILENAME_STORAGE_LEN;
+
+    bytes[cursor..cursor + 4].copy_from_slice(&(first_stream_offset as u32).to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&0u32.to_le_bytes());
+    cursor += FILE_REGION_LEN;
+
+    bytes[cursor..cursor + debug_data.len()].copy_from_slice(&debug_data);
+    bytes[file_length - FOOTER_LEN..file_length].fill(0xFA);
+    let _ = second_stream_offset;
+
     bytes
 }
 
@@ -549,10 +635,72 @@ fn selects_text_engine_for_two_text_inputs() {
 
 #[test]
 fn selects_hermes_engine_for_same_version_hermes_inputs() {
+    let old = hermes_header_bytes(HeaderSpec::default());
+    let new = hermes_header_bytes(HeaderSpec {
+        file_length: 132,
+        debug_info_offset: 128,
+        ..HeaderSpec::default()
+    });
+
+    assert_eq!(select_engine(&old, &new), EngineKind::Hermes);
+}
+
+#[test]
+fn falls_back_to_generic_binary_for_unsupported_same_version_hermes_inputs() {
+    let old = hermes_header_bytes(HeaderSpec {
+        version: 100,
+        ..HeaderSpec::default()
+    });
+    let new = hermes_header_bytes(HeaderSpec {
+        version: 100,
+        file_length: 132,
+        debug_info_offset: 128,
+        ..HeaderSpec::default()
+    });
+
+    assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
+}
+
+#[test]
+fn falls_back_to_generic_binary_for_mixed_hermes_forms() {
+    let old = hermes_header_bytes(HeaderSpec::default());
+    let new = hermes_header_bytes(HeaderSpec {
+        magic: HERMES_DELTA_MAGIC,
+        ..HeaderSpec::default()
+    });
+
+    assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
+}
+
+#[test]
+fn structured_hermes_compatibility_is_version_gated() {
+    assert!(supports_structured_hermes_version(98));
+    assert!(supports_structured_hermes_version(99));
+    assert!(!supports_structured_hermes_version(97));
+    assert!(!supports_structured_hermes_version(100));
+}
+
+#[test]
+fn structured_hermes_compatibility_rejects_truncated_or_unknown_inputs() {
+    let supported = hermes_header_bytes(HeaderSpec::default());
+    let unsupported = hermes_header_bytes(HeaderSpec {
+        version: 100,
+        ..HeaderSpec::default()
+    });
+    let truncated = hermes_bytes(HERMES_MAGIC, 99);
+
+    assert!(can_use_structured_hermes(&supported));
+    assert!(!can_use_structured_hermes(&unsupported));
+    assert!(!can_use_structured_hermes(&truncated));
+    assert!(!can_use_structured_hermes(b"plain text"));
+}
+
+#[test]
+fn falls_back_to_generic_binary_for_truncated_same_version_hermes_inputs() {
     let old = hermes_bytes(HERMES_MAGIC, 99);
     let new = hermes_bytes(HERMES_MAGIC, 99);
 
-    assert_eq!(select_engine(&old, &new), EngineKind::Hermes);
+    assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
 }
 
 #[test]
@@ -626,6 +774,27 @@ fn parses_hermes_artifact_without_footer() {
                 structured_end_offset: 288,
             },
             function_layout: None,
+            debug_info_layout: Some(HermesDebugInfoLayout {
+                header: HermesDebugInfoHeader {
+                    filename_count: 0,
+                    filename_storage_size: 0,
+                    file_region_count: 0,
+                    debug_data_size: 0,
+                },
+                file_regions: vec![],
+                streams: vec![],
+                header_offset: 1536,
+                header_end_offset: 1552,
+                filename_table_offset: 1552,
+                filename_table_end_offset: 1552,
+                filename_storage_offset: 1552,
+                filename_storage_end_offset: 1552,
+                file_regions_offset: 1552,
+                file_regions_end_offset: 1552,
+                debug_data_offset: 1552,
+                debug_data_end_offset: 1552,
+                end_offset: 2048,
+            }),
         })
     );
 }
@@ -684,6 +853,51 @@ fn parses_hermes_header_metadata() {
             function_source_count: 13,
             debug_info_offset: 3000,
             options_flags: 0b0000_0010,
+        })
+    );
+}
+
+#[test]
+fn parses_hermes_debug_info_layout_and_streams() {
+    let bytes = hermes_header_with_debug_info_bytes();
+
+    assert_eq!(
+        parse_debug_info_layout(&bytes),
+        Some(HermesDebugInfoLayout {
+            header: HermesDebugInfoHeader {
+                filename_count: 1,
+                filename_storage_size: 4,
+                file_region_count: 1,
+                debug_data_size: 16,
+            },
+            file_regions: vec![HermesDebugFileRegion {
+                from_address: 0,
+                filename_id: 0,
+                source_mapping_url_id: 0,
+            }],
+            streams: vec![
+                HermesDebugDataStream {
+                    function_index: 7,
+                    offset: 168,
+                    end_offset: 176,
+                },
+                HermesDebugDataStream {
+                    function_index: 11,
+                    offset: 176,
+                    end_offset: 184,
+                },
+            ],
+            header_offset: 128,
+            header_end_offset: 144,
+            filename_table_offset: 144,
+            filename_table_end_offset: 152,
+            filename_storage_offset: 152,
+            filename_storage_end_offset: 156,
+            file_regions_offset: 156,
+            file_regions_end_offset: 168,
+            debug_data_offset: 168,
+            debug_data_end_offset: 184,
+            end_offset: 204,
         })
     );
 }

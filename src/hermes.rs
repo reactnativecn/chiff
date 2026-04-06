@@ -50,6 +50,10 @@ const OBJ_SHAPE_TABLE_ENTRY_SIZE: u32 = 8;
 const BIG_INT_TABLE_ENTRY_SIZE: u32 = 8;
 const REG_EXP_TABLE_ENTRY_SIZE: u32 = 8;
 const U32_PAIR_SIZE: u32 = 8;
+const DEBUG_INFO_HEADER_SIZE: u32 = 16;
+const DEBUG_INFO_FILENAME_ENTRY_SIZE: u32 = 8;
+const DEBUG_FILE_REGION_ENTRY_SIZE: u32 = 12;
+pub const SUPPORTED_STRUCTURED_HERMES_VERSIONS: &[u32] = &[98, 99];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesHeader {
@@ -143,11 +147,52 @@ pub struct HermesFunctionInfoBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesDebugInfoHeader {
+    pub filename_count: u32,
+    pub filename_storage_size: u32,
+    pub file_region_count: u32,
+    pub debug_data_size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesDebugFileRegion {
+    pub from_address: u32,
+    pub filename_id: u32,
+    pub source_mapping_url_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesDebugDataStream {
+    pub function_index: u32,
+    pub offset: u32,
+    pub end_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesDebugInfoLayout {
+    pub header: HermesDebugInfoHeader,
+    pub file_regions: Vec<HermesDebugFileRegion>,
+    pub streams: Vec<HermesDebugDataStream>,
+    pub header_offset: u32,
+    pub header_end_offset: u32,
+    pub filename_table_offset: u32,
+    pub filename_table_end_offset: u32,
+    pub filename_storage_offset: u32,
+    pub filename_storage_end_offset: u32,
+    pub file_regions_offset: u32,
+    pub file_regions_end_offset: u32,
+    pub debug_data_offset: u32,
+    pub debug_data_end_offset: u32,
+    pub end_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesArtifact {
     pub header: HermesHeader,
     pub payload_len: usize,
     pub section_layout: HermesSectionLayout,
     pub function_layout: Option<HermesFunctionLayout>,
+    pub debug_info_layout: Option<HermesDebugInfoLayout>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,16 +204,28 @@ struct RawFunctionInfoBlock {
     has_debug_offsets: bool,
 }
 
+pub fn supports_structured_hermes_version(version: u32) -> bool {
+    SUPPORTED_STRUCTURED_HERMES_VERSIONS.contains(&version)
+}
+
+pub fn can_use_structured_hermes(bytes: &[u8]) -> bool {
+    parse_header(bytes)
+        .map(|header| supports_structured_hermes_version(header.version))
+        .unwrap_or(false)
+}
+
 pub fn parse_artifact(bytes: &[u8]) -> Option<HermesArtifact> {
     let header = parse_header(bytes)?;
     let section_layout = parse_section_layout_from_header(bytes, &header)?;
     let function_layout = parse_function_layout_from_parts(bytes, &header, &section_layout);
+    let debug_info_layout = parse_debug_info_layout_from_header(bytes, &header);
 
     Some(HermesArtifact {
         header,
         payload_len: bytes.len(),
         section_layout,
         function_layout,
+        debug_info_layout,
     })
 }
 
@@ -216,6 +273,11 @@ pub fn parse_function_layout(bytes: &[u8]) -> Option<HermesFunctionLayout> {
     let header = parse_header(bytes)?;
     let section_layout = parse_section_layout_from_header(bytes, &header)?;
     parse_function_layout_from_parts(bytes, &header, &section_layout)
+}
+
+pub fn parse_debug_info_layout(bytes: &[u8]) -> Option<HermesDebugInfoLayout> {
+    let header = parse_header(bytes)?;
+    parse_debug_info_layout_from_header(bytes, &header)
 }
 
 fn parse_section_layout_from_header(
@@ -497,7 +559,11 @@ fn parse_function_layout_from_parts(
     let body_end_by_offset = build_function_body_end_offsets(&functions, bytecode_region_end)?;
     for function in &mut functions {
         let body_end_offset = *body_end_by_offset.get(&function.bytecode_offset)?;
-        if function.bytecode_offset.checked_add(function.bytecode_size)? > body_end_offset {
+        if function
+            .bytecode_offset
+            .checked_add(function.bytecode_size)?
+            > body_end_offset
+        {
             return None;
         }
         function.body_end_offset = body_end_offset;
@@ -509,6 +575,136 @@ fn parse_function_layout_from_parts(
         bytecode_region_start,
         bytecode_region_end,
     })
+}
+
+fn parse_debug_info_layout_from_header(
+    bytes: &[u8],
+    header: &HermesHeader,
+) -> Option<HermesDebugInfoLayout> {
+    validate_artifact_bounds(bytes, header)?;
+
+    let header_offset = header.debug_info_offset;
+    let header_end_offset = header_offset.checked_add(DEBUG_INFO_HEADER_SIZE)?;
+    if header_end_offset > header.file_length {
+        return None;
+    }
+
+    let debug_header = HermesDebugInfoHeader {
+        filename_count: read_u32_at_u32(bytes, header_offset, 0)?,
+        filename_storage_size: read_u32_at_u32(bytes, header_offset, 4)?,
+        file_region_count: read_u32_at_u32(bytes, header_offset, 8)?,
+        debug_data_size: read_u32_at_u32(bytes, header_offset, 12)?,
+    };
+
+    let filename_table_offset = header_end_offset;
+    let filename_table_end_offset = filename_table_offset.checked_add(multiply_u32(
+        debug_header.filename_count,
+        DEBUG_INFO_FILENAME_ENTRY_SIZE,
+    )?)?;
+    let filename_storage_offset = filename_table_end_offset;
+    let filename_storage_end_offset =
+        filename_storage_offset.checked_add(debug_header.filename_storage_size)?;
+    let file_regions_offset = filename_storage_end_offset;
+    let file_regions_end_offset = file_regions_offset.checked_add(multiply_u32(
+        debug_header.file_region_count,
+        DEBUG_FILE_REGION_ENTRY_SIZE,
+    )?)?;
+    let debug_data_offset = file_regions_end_offset;
+    let debug_data_end_offset = debug_data_offset.checked_add(debug_header.debug_data_size)?;
+
+    if debug_data_end_offset > header.file_length {
+        return None;
+    }
+
+    let mut file_regions = Vec::with_capacity(debug_header.file_region_count as usize);
+    let mut previous_from_address = 0u32;
+    for index in 0..debug_header.file_region_count {
+        let region_offset =
+            file_regions_offset.checked_add(index.checked_mul(DEBUG_FILE_REGION_ENTRY_SIZE)?)?;
+        let region = HermesDebugFileRegion {
+            from_address: read_u32_at_u32(bytes, region_offset, 0)?,
+            filename_id: read_u32_at_u32(bytes, region_offset, 4)?,
+            source_mapping_url_id: read_u32_at_u32(bytes, region_offset, 8)?,
+        };
+        if index > 0 && region.from_address < previous_from_address {
+            return None;
+        }
+        if region.from_address > debug_header.debug_data_size {
+            return None;
+        }
+        previous_from_address = region.from_address;
+        file_regions.push(region);
+    }
+
+    let streams = parse_debug_data_streams(
+        bytes.get(debug_data_offset as usize..debug_data_end_offset as usize)?,
+        debug_data_offset,
+    )?;
+
+    Some(HermesDebugInfoLayout {
+        header: debug_header,
+        file_regions,
+        streams,
+        header_offset,
+        header_end_offset,
+        filename_table_offset,
+        filename_table_end_offset,
+        filename_storage_offset,
+        filename_storage_end_offset,
+        file_regions_offset,
+        file_regions_end_offset,
+        debug_data_offset,
+        debug_data_end_offset,
+        end_offset: header.file_length,
+    })
+}
+
+fn parse_debug_data_streams(
+    debug_data: &[u8],
+    debug_data_offset: u32,
+) -> Option<Vec<HermesDebugDataStream>> {
+    let mut streams = Vec::new();
+    let mut relative_offset = 0usize;
+
+    while relative_offset < debug_data.len() {
+        let stream_start = relative_offset;
+        let function_index = read_signed_leb128(debug_data, &mut relative_offset)?;
+        let function_index = u32::try_from(function_index).ok()?;
+
+        read_signed_leb128(debug_data, &mut relative_offset)?;
+        read_signed_leb128(debug_data, &mut relative_offset)?;
+        read_signed_leb128(debug_data, &mut relative_offset)?;
+
+        loop {
+            let address_delta = read_signed_leb128(debug_data, &mut relative_offset)?;
+            if address_delta == -1 {
+                break;
+            }
+
+            let line_delta = read_signed_leb128(debug_data, &mut relative_offset)?;
+            if (line_delta & 1) == 0 {
+                continue;
+            }
+
+            read_signed_leb128(debug_data, &mut relative_offset)?;
+            if (line_delta & 2) != 0 {
+                read_signed_leb128(debug_data, &mut relative_offset)?;
+            }
+            if (line_delta & 4) != 0 {
+                read_signed_leb128(debug_data, &mut relative_offset)?;
+            }
+        }
+
+        let offset = debug_data_offset.checked_add(u32::try_from(stream_start).ok()?)?;
+        let end_offset = debug_data_offset.checked_add(u32::try_from(relative_offset).ok()?)?;
+        streams.push(HermesDebugDataStream {
+            function_index,
+            offset,
+            end_offset,
+        });
+    }
+
+    Some(streams)
 }
 
 fn build_function_body_end_offsets(
@@ -704,6 +900,30 @@ fn read_u32_at_u32(bytes: &[u8], base_offset: u32, relative_offset: usize) -> Op
         .ok()?
         .checked_add(relative_offset)?;
     read_u32(bytes, offset)
+}
+
+fn read_signed_leb128(bytes: &[u8], offset: &mut usize) -> Option<i64> {
+    let mut result = 0i64;
+    let mut shift = 0u32;
+
+    loop {
+        let byte = i64::from(*bytes.get(*offset)?);
+        *offset = offset.checked_add(1)?;
+
+        result |= (byte & 0x7f) << shift;
+        shift = shift.checked_add(7)?;
+
+        if (byte & 0x80) == 0 {
+            if shift < 64 && (byte & 0x40) != 0 {
+                result |= (!0i64) << shift;
+            }
+            return Some(result);
+        }
+
+        if shift >= 64 {
+            return None;
+        }
+    }
 }
 
 fn decode_large_header_offset(word1: u32, word2: u32) -> u32 {

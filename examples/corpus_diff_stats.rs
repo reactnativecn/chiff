@@ -1,8 +1,7 @@
-use chiff::{detect_input_format, diff_bytes};
+use chiff::{can_use_structured_hermes, detect_input_format, diff_bytes, select_engine};
 use std::{
     collections::BTreeSet,
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process,
 };
@@ -43,7 +42,7 @@ fn main() {
     let mut total_inserted_bytes = 0usize;
 
     println!(
-        "path\tstatus\told_format\tnew_format\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes"
+        "path\tstatus\told_format\tnew_format\tselected_engine\told_structured_hermes_compatible\tnew_structured_hermes_compatible\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes"
     );
 
     for relative_path in relative_paths {
@@ -89,12 +88,30 @@ fn main() {
             _ => (0, 0, 0, 0, 0),
         };
 
+        let selected_engine = match (old_bytes.as_deref(), new_bytes.as_deref()) {
+            (Some(old), Some(new)) => format!("{:?}", select_engine(old, new)),
+            _ => String::from("-"),
+        };
+        let old_structured_hermes = old_bytes
+            .as_deref()
+            .map(can_use_structured_hermes)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("-"));
+        let new_structured_hermes = new_bytes
+            .as_deref()
+            .map(can_use_structured_hermes)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("-"));
+
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             relative_path.display(),
             status,
             old_format,
             new_format,
+            selected_engine,
+            old_structured_hermes,
+            new_structured_hermes,
             stats.0,
             stats.1,
             stats.2,
@@ -104,7 +121,7 @@ fn main() {
     }
 
     println!(
-        "TOTAL\tpaired={}\t-\t-\t-\t{}\t{}\t{}\t{}",
+        "TOTAL\tpaired={}\t-\t-\t-\t-\t-\t-\t{}\t{}\t{}\t{}",
         total_pairs, total_copy_ops, total_insert_ops, total_copied_bytes, total_inserted_bytes
     );
 }
@@ -123,7 +140,11 @@ fn collect_relative_files_recursive(root: &Path, current: &Path, files: &mut BTr
 
     for entry in entries {
         let entry = entry.unwrap_or_else(|error| {
-            eprintln!("failed to read directory entry in {}: {}", current.display(), error);
+            eprintln!(
+                "failed to read directory entry in {}: {}",
+                current.display(),
+                error
+            );
             process::exit(1);
         });
         let path = entry.path();

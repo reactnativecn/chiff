@@ -14,6 +14,12 @@ The goal is to build a format-aware diff engine that:
 - falls back safely to generic byte diff when structure cannot be trusted
 - remains easy to bind into Node and Bun through one shared native addon
 
+Today that also means the Hermes-aware path is intentionally conservative:
+
+- structured Hermes diff is only enabled for explicitly validated bytecode versions
+- both sides must have the same Hermes bytecode version and the same bytecode form
+- if header parsing or later structural parsing fails, patch generation falls back to generic binary diff
+
 The current surrounding ecosystem baseline is documented in [baselines.md](/Users/sunny/Documents/workspace/chiff/docs/baselines.md).
 
 ## Non-goals
@@ -47,6 +53,7 @@ Whenever structural parsing is incomplete or uncertain, `chiff` must degrade to 
 - function-aware
 - section-aware
 - generic prefix/suffix byte diff
+- generic binary diff for unknown or unsupported Hermes versions/forms
 
 This keeps correctness separate from optimization.
 
@@ -92,6 +99,10 @@ Bindings should only expose stable library APIs.
 `chiff` currently exposes:
 
 - input format detection
+- engine selection
+- structured Hermes compatibility helpers:
+  - `supports_structured_hermes_version`
+  - `can_use_structured_hermes`
 - Hermes header parsing
 - Hermes section layout parsing
 - Hermes function layout parsing
@@ -126,7 +137,8 @@ The first real mutation pair currently shows:
 
 - text diff is already efficient for a minimal string edit
 - Hermes function layout on real bundles required support for non-monotonic and duplicate overflowed bytecode offsets
-- the dominant remaining Hermes churn is in the trailing `debug_info` region, not in function bodies
+- Hermes `debug_info` can now be parsed into header, filename table, filename storage, file-region table, and per-function debug-data streams
+- the first real Hermes mutation pair now diffs down to a small patch because `debug_data` is preserved as `Copy`
 
 ## Current Hermes Model
 
@@ -143,6 +155,10 @@ The first real mutation pair currently shows:
 - bytecode options flags
 
 This gives the diff engine enough global metadata to parse and validate the file layout.
+
+`chiff` treats structured Hermes parsing as version-gated rather than open-ended.
+The validated set is exposed as `SUPPORTED_STRUCTURED_HERMES_VERSIONS`, which currently contains `98` and `99`.
+That matches the real fixture corpus in this repository and the current upstream Hermes source tree, where [BytecodeVersion.h](/Users/sunny/Documents/workspace/hermes/include/hermes/BCGen/HBC/BytecodeVersion.h) defines `BYTECODE_VERSION = 99`.
 
 ### Section layout
 
@@ -232,6 +248,18 @@ Hermes diff currently uses a cascading strategy:
 This already yields a meaningful improvement over monolithic byte diff because unchanged sections and unchanged functions can remain `Copy` even when earlier regions shift.
 The same middle-anchor resync is also used inside each diffed region, so large unchanged byte runs inside a changed function body can survive as `Copy`.
 
+### Hermes compatibility and fallback policy
+
+Engine selection is now deliberately stricter than format detection:
+
+- two Hermes inputs only use the structured Hermes path if both are parseable headers
+- both must be on the same Hermes bytecode version
+- both must use the same bytecode form
+- the version must be in `SUPPORTED_STRUCTURED_HERMES_VERSIONS`
+- if later structural parsing still fails, `diff_bytes` falls back to generic binary diff before emitting the patch
+
+This means Hermes version churn or partial format breakage should reduce patch quality, but should not compromise patch correctness.
+
 ## What Is Implemented Today
 
 The following milestones are complete:
@@ -250,6 +278,8 @@ The following milestones are complete:
 - per-subregion Hermes diff for overflowed info metadata, so unchanged exception tables can survive changed large-header/debug payloads
 - middle-anchor resync inside diff regions, so unchanged interior byte runs can survive changed prefixes and suffixes
 - support for real-world overflowed Hermes function headers where bytecode offsets are non-monotonic or duplicated across headers
+- parsing of global Hermes `debug_info` layout and function debug-data streams using the upstream serialized format
+- debug-info-aware diff that preserves unchanged filename tables, file regions, and per-function debug-data streams
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Rust crate verification
 - Node and Bun smoke-test verification through one Node-API addon
@@ -285,11 +315,16 @@ It does not yet understand:
 - operand classes
 - Hermes delta-relative operand normalization
 
-### 3. Debug-info diff is still coarse
+### 3. Debug-info semantics are still coarse
 
-The first real Hermes mutation pair shows that `debug_info` dominates both patch size and diff time even when function bodies do not change.
-`chiff` currently treats the full trailing debug region as one large byte slice and relies on generic resynchronization inside it.
-The next meaningful Hermes optimization should target debug-info structure directly.
+`chiff` now parses the top-level `debug_info` layout and function debug-data stream boundaries.
+However, it still does not parse the internal semantics of:
+
+- filename table entries
+- file-region mappings beyond raw entries
+- individual source-location records within a debug-data stream
+
+That means stream-level preservation is good, but intra-stream optimization is still generic.
 
 ### 4. Text diff is still conservative
 

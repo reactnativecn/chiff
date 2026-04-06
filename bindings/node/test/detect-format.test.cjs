@@ -33,3 +33,9 @@ assert.deepEqual(diffStatsResult, {
   copiedBytes: 6,
   insertedBytes: 3,
 });
+
+assert.equal(
+  chiff.selectEngineName(Buffer.from('const a = 1;\n'), Buffer.from('const a = 2;\n')),
+  'text',
+);
+assert.equal(chiff.structuredHermesCompatible(hermesBytes(99)), false);

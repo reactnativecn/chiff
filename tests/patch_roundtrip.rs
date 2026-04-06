@@ -460,6 +460,74 @@ fn hermes_overflow_function_bytes_with_info(
     bytes
 }
 
+fn append_signed_leb128(output: &mut Vec<u8>, mut value: i64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+
+        let done = (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0);
+        if done {
+            output.push(byte);
+            break;
+        }
+
+        output.push(byte | 0x80);
+    }
+}
+
+fn hermes_bytes_with_debug_info_filename(filename_storage: &[u8]) -> Vec<u8> {
+    const DEBUG_INFO_OFFSET: usize = 128;
+    const DEBUG_INFO_HEADER_LEN: usize = 16;
+    const FILENAME_TABLE_LEN: usize = 8;
+    const FILE_REGION_LEN: usize = 12;
+    const FOOTER_LEN: usize = 20;
+
+    let mut debug_data = Vec::new();
+    append_signed_leb128(&mut debug_data, 7);
+    append_signed_leb128(&mut debug_data, 10);
+    append_signed_leb128(&mut debug_data, 3);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, 1);
+    append_signed_leb128(&mut debug_data, 0);
+    append_signed_leb128(&mut debug_data, -1);
+
+    let file_length = DEBUG_INFO_OFFSET
+        + DEBUG_INFO_HEADER_LEN
+        + FILENAME_TABLE_LEN
+        + filename_storage.len()
+        + FILE_REGION_LEN
+        + debug_data.len()
+        + FOOTER_LEN;
+    let mut bytes = hermes_bytes(99, 0x00);
+    bytes.resize(file_length, 0);
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[108..112].copy_from_slice(&(DEBUG_INFO_OFFSET as u32).to_le_bytes());
+
+    let mut cursor = DEBUG_INFO_OFFSET;
+    bytes[cursor..cursor + 4].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&(filename_storage.len() as u32).to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 12..cursor + 16].copy_from_slice(&(debug_data.len() as u32).to_le_bytes());
+    cursor += DEBUG_INFO_HEADER_LEN;
+
+    bytes[cursor..cursor + 4].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&(filename_storage.len() as u32).to_le_bytes());
+    cursor += FILENAME_TABLE_LEN;
+
+    bytes[cursor..cursor + filename_storage.len()].copy_from_slice(filename_storage);
+    cursor += filename_storage.len();
+
+    bytes[cursor..cursor + 4].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&0u32.to_le_bytes());
+    cursor += FILE_REGION_LEN;
+
+    bytes[cursor..cursor + debug_data.len()].copy_from_slice(&debug_data);
+    bytes[file_length - FOOTER_LEN..file_length].fill(0xF7);
+    bytes
+}
+
 #[test]
 fn apply_patch_replays_copy_and_insert_ops() {
     let old = b"hello world";
@@ -545,6 +613,30 @@ fn diff_bytes_roundtrips_hermes_bytecode() {
 }
 
 #[test]
+fn diff_bytes_roundtrips_truncated_supported_hermes_via_generic_fallback() {
+    let old = hermes_bytes(99, 0x11);
+    let mut new = hermes_bytes(99, 0x11);
+    new[24] = 0x44;
+    new[25] = 0x55;
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+}
+
+#[test]
+fn diff_bytes_roundtrips_unsupported_same_version_hermes_via_generic_fallback() {
+    let old = hermes_bytes(100, 0x11);
+    let mut new = hermes_bytes(100, 0x11);
+    new[20] = 0x22;
+    new[21] = 0x33;
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+}
+
+#[test]
 fn diff_bytes_preserves_unchanged_hermes_section_between_shifted_changes() {
     let old = hermes_sectioned_bytes(
         99,
@@ -620,9 +712,10 @@ fn diff_bytes_roundtrips_overflowed_hermes_with_shared_bytecode_offsets() {
     let patch = diff_bytes(&old, &new);
 
     assert_eq!(apply_patch(&old, &patch).unwrap(), new);
-    assert!(patch.ops.iter().any(|op| {
-        matches!(op, PatchOp::Copy { len, .. } if *len >= 4)
-    }));
+    assert!(patch
+        .ops
+        .iter()
+        .any(|op| { matches!(op, PatchOp::Copy { len, .. } if *len >= 4) }));
 }
 
 #[test]
@@ -698,6 +791,23 @@ fn diff_bytes_preserves_unchanged_exception_table_inside_changed_small_info_bloc
             op,
             PatchOp::Copy { offset, len }
                 if *offset <= 160 && offset.saturating_add(*len) >= 176
+        )
+    }));
+}
+
+#[test]
+fn diff_bytes_preserves_unchanged_hermes_debug_data_when_only_filename_storage_changes() {
+    let old = hermes_bytes_with_debug_info_filename(b"app\0");
+    let new = hermes_bytes_with_debug_info_filename(b"application\0");
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 168 && offset.saturating_add(*len) >= 176
         )
     }));
 }

@@ -1,4 +1,4 @@
-use chiff::{detect_input_format, diff_bytes};
+use chiff::{can_use_structured_hermes, detect_input_format, diff_bytes, select_engine};
 use std::{env, fs, process};
 
 fn main() {
@@ -27,6 +27,15 @@ fn main() {
 
     println!("old_format={:?}", detect_input_format(&old));
     println!("new_format={:?}", detect_input_format(&new));
+    println!("selected_engine={:?}", select_engine(&old, &new));
+    println!(
+        "old_structured_hermes_compatible={}",
+        can_use_structured_hermes(&old)
+    );
+    println!(
+        "new_structured_hermes_compatible={}",
+        can_use_structured_hermes(&new)
+    );
     println!("op_count={}", stats.op_count);
     println!("copy_op_count={}", stats.copy_op_count);
     println!("insert_op_count={}", stats.insert_op_count);

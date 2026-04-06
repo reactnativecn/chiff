@@ -48,19 +48,20 @@ Hermes bundle:
 
 - `old_size=2697461`
 - `new_size=2697468`
-- `op_count=18`
-- `copy_op_count=10`
-- `insert_op_count=8`
-- `copied_bytes=2670957`
-- `inserted_bytes=26511`
+- `op_count=12`
+- `copy_op_count=6`
+- `insert_op_count=6`
+- `copied_bytes=2697407`
+- `inserted_bytes=61`
 
 ## Current Finding
 
-`hermes_region_report` on this pair shows:
+`hermes_region_report` on this pair now shows:
 
 - Hermes function layout now parses successfully on the real bundle.
 - Function bodies are unchanged for this mutation.
 - `string_storage` only changes locally.
-- The dominant churn is in the trailing `debug_info` region.
+- The global `debug_data` payload is unchanged.
+- The remaining Hermes churn is concentrated in `debug_info` header metadata, filename storage, and the trailing footer bytes.
 
-That makes `debug_info` the next structural optimization target for Hermes-aware diff.
+`chiff` now parses `debug_info` and diffs it by subregion, including stream-aware handling of `debug_data`.

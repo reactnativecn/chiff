@@ -38,7 +38,7 @@ let totalCopiedBytes = 0;
 let totalInsertedBytes = 0;
 
 console.log(
-  'path\tstatus\told_format\tnew_format\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes',
+  'path\tstatus\told_format\tnew_format\tselected_engine\told_structured_hermes_compatible\tnew_structured_hermes_compatible\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes',
 );
 
 for (const relativePath of relativePaths) {
@@ -74,8 +74,10 @@ for (const relativePath of relativePaths) {
     copiedBytes: 0,
     insertedBytes: 0,
   };
+  let selectedEngine = '-';
 
   if (oldBytes && newBytes) {
+    selectedEngine = chiff.selectEngineName(oldBytes, newBytes);
     stats = chiff.diffStats(oldBytes, newBytes);
     totalPairs += 1;
     totalCopyOps += stats.copyOpCount;
@@ -90,6 +92,9 @@ for (const relativePath of relativePaths) {
       status,
       oldFormat,
       newFormat,
+      selectedEngine,
+      oldBytes ? String(chiff.structuredHermesCompatible(oldBytes)) : '-',
+      newBytes ? String(chiff.structuredHermesCompatible(newBytes)) : '-',
       stats.opCount,
       stats.copyOpCount,
       stats.insertOpCount,
@@ -103,6 +108,9 @@ console.log(
   [
     'TOTAL',
     `paired=${totalPairs}`,
+    '-',
+    '-',
+    '-',
     '-',
     '-',
     '-',
