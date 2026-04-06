@@ -1,0 +1,76 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "mutation": {
+    "file": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate/src/index.tsx",
+    "line": 115,
+    "from": "这是版本一",
+    "to": "这是版本二"
+  },
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "68320a0a47f2318eabd49e9a42c280ceb2e8f2017d4aa68c2b4fbd2c806b9d9a"
+    },
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697461,
+      "sha256": "30e78d51670954355f2295903b3e7c11e0f2c2e4a92b32ff1fb9bc9d72bfb087"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697468,
+      "sha256": "899148814c645936fe47cc0c200403d6a98f6c1b174f28c96bc23fce471cb320"
+    }
+  ],
+  "current_diff_stats": {
+    "text": {
+      "op_count": 3,
+      "copy_op_count": 2,
+      "insert_op_count": 1,
+      "copied_bytes": 2093748,
+      "inserted_bytes": 2
+    },
+    "hermes": {
+      "op_count": 18,
+      "copy_op_count": 10,
+      "insert_op_count": 8,
+      "copied_bytes": 2670957,
+      "inserted_bytes": 26511
+    }
+  },
+  "current_findings": {
+    "function_layout_parses_real_bundle": true,
+    "function_bodies_changed": false,
+    "string_storage_changed_old_bytes": 1,
+    "string_storage_changed_new_bytes": 1,
+    "debug_info_changed_old_bytes": 430293,
+    "debug_info_changed_new_bytes": 430300
+  }
+}

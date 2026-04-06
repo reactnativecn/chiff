@@ -1,0 +1,26 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "entry_file": "index.js",
+  "react_native_version": "0.84.1",
+  "artifacts": [
+    {
+      "path": "text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "path": "hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697461,
+      "sha256": "30e78d51670954355f2295903b3e7c11e0f2c2e4a92b32ff1fb9bc9d72bfb087"
+    }
+  ]
+}

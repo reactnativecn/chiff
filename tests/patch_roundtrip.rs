@@ -297,6 +297,63 @@ fn hermes_overflow_function_bytes(function_bodies: &[&[u8]]) -> Vec<u8> {
     bytes
 }
 
+fn hermes_overflow_function_bytes_with_header_map(
+    function_bodies: &[&[u8]],
+    header_body_indices: &[usize],
+) -> Vec<u8> {
+    assert_eq!(function_bodies.len(), 2);
+    assert_eq!(header_body_indices.len(), 3);
+
+    let header_len = 128usize;
+    let function_headers_len = header_body_indices.len() * 12;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_end =
+        bytecode_start + function_bodies.iter().map(|body| body.len()).sum::<usize>();
+    let info_start = align4(bytecode_end);
+
+    let mut info_offset = info_start;
+    let mut large_header_offsets = Vec::with_capacity(header_body_indices.len());
+    for _ in header_body_indices {
+        large_header_offsets.push(info_offset);
+        info_offset = align4(info_offset + 36);
+    }
+
+    let debug_info_offset = info_offset;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = vec![0; file_length];
+    bytes[0..8].copy_from_slice(&HERMES_MAGIC.to_le_bytes());
+    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[40..44].copy_from_slice(&(header_body_indices.len() as u32).to_le_bytes());
+    bytes[108..112].copy_from_slice(&(debug_info_offset as u32).to_le_bytes());
+
+    let first_body_offset = bytecode_start as u32;
+    let second_body_offset = first_body_offset + function_bodies[0].len() as u32;
+    let body_offsets = [first_body_offset, second_body_offset];
+
+    bytes[first_body_offset as usize..first_body_offset as usize + function_bodies[0].len()]
+        .copy_from_slice(function_bodies[0]);
+    bytes[second_body_offset as usize..second_body_offset as usize + function_bodies[1].len()]
+        .copy_from_slice(function_bodies[1]);
+
+    for (index, body_index) in header_body_indices.iter().copied().enumerate() {
+        let header = overflow_function_header(large_header_offsets[index] as u32);
+        let header_offset = header_len + index * 12;
+        bytes[header_offset..header_offset + 12].copy_from_slice(&header);
+
+        let large_header = large_function_header(
+            body_offsets[body_index],
+            function_bodies[body_index].len() as u32,
+        );
+        let large_header_offset = large_header_offsets[index];
+        bytes[large_header_offset..large_header_offset + 36].copy_from_slice(&large_header);
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xFE);
+    bytes
+}
+
 fn hermes_overflow_function_bytes_with_debug(
     function_bodies: &[&[u8]],
     debug_offsets: &[Option<u32>],
@@ -546,6 +603,25 @@ fn diff_bytes_preserves_unchanged_overflowed_hermes_function_after_offset_shift(
             op,
             PatchOp::Copy { offset, len } if *offset == 155 && *len >= 4
         )
+    }));
+}
+
+#[test]
+fn diff_bytes_roundtrips_overflowed_hermes_with_shared_bytecode_offsets() {
+    let old = hermes_overflow_function_bytes_with_header_map(
+        &[b"\x01\x02\x03", b"\xAA\xBB\xCC\xDD"],
+        &[1, 0, 1],
+    );
+    let new = hermes_overflow_function_bytes_with_header_map(
+        &[b"\x10\x11\x12\x13\x14", b"\xAA\xBB\xCC\xDD"],
+        &[1, 0, 1],
+    );
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(op, PatchOp::Copy { len, .. } if *len >= 4)
     }));
 }
 

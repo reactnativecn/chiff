@@ -13,6 +13,8 @@
   },
   "scripts": {
     "build:debug": "cargo build -p chiff-node && node ./scripts/prepare-addon.cjs debug",
+    "corpus:stats:node": "npm run build:debug && node ./scripts/corpus-diff-stats.cjs",
+    "corpus:stats:bun": "npm run build:debug && bun ./scripts/corpus-diff-stats.cjs",
     "test:node": "npm run build:debug && node ./test/detect-format.test.cjs",
     "test:bun": "npm run build:debug && bun ./test/detect-format.test.cjs"
   }

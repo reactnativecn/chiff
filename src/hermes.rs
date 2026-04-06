@@ -1,4 +1,5 @@
 use crate::format::{detect_input_format, HermesForm, InputFormat};
+use std::collections::HashMap;
 
 const HERMES_HEADER_LEN: usize = 128;
 const BYTECODE_ALIGNMENT: u32 = 4;
@@ -388,7 +389,6 @@ fn parse_function_layout_from_parts(
     }
 
     let mut functions = Vec::with_capacity(header.function_count as usize);
-    let mut next_offset_floor = 0u32;
     let mut bytecode_region_end = header.debug_info_offset;
     let mut raw_info_blocks = Vec::new();
 
@@ -463,9 +463,7 @@ fn parse_function_layout_from_parts(
             )
         };
 
-        if bytecode_offset < section_layout.structured_end_offset
-            || bytecode_offset < next_offset_floor
-        {
+        if bytecode_offset < section_layout.structured_end_offset {
             return None;
         }
 
@@ -474,7 +472,6 @@ fn parse_function_layout_from_parts(
             return None;
         }
 
-        next_offset_floor = bytecode_offset.checked_add(1)?;
         functions.push(HermesFunction {
             index,
             header_offset,
@@ -485,8 +482,9 @@ fn parse_function_layout_from_parts(
     }
 
     let bytecode_region_start = functions
-        .first()
+        .iter()
         .map(|function| function.bytecode_offset)
+        .min()
         .unwrap_or(section_layout.structured_end_offset);
     let bytecode_region_end = if functions.is_empty() {
         section_layout.structured_end_offset
@@ -496,18 +494,10 @@ fn parse_function_layout_from_parts(
     raw_info_blocks.sort_by_key(|block| block.offset);
     let info_blocks = build_info_blocks(bytes, header, &raw_info_blocks)?;
 
-    for function_index in 0..functions.len() {
-        let body_end_offset = functions
-            .get(function_index + 1)
-            .map(|next| next.bytecode_offset)
-            .unwrap_or(bytecode_region_end);
-
-        let function = &mut functions[function_index];
-        if function
-            .bytecode_offset
-            .checked_add(function.bytecode_size)?
-            > body_end_offset
-        {
+    let body_end_by_offset = build_function_body_end_offsets(&functions, bytecode_region_end)?;
+    for function in &mut functions {
+        let body_end_offset = *body_end_by_offset.get(&function.bytecode_offset)?;
+        if function.bytecode_offset.checked_add(function.bytecode_size)? > body_end_offset {
             return None;
         }
         function.body_end_offset = body_end_offset;
@@ -519,6 +509,32 @@ fn parse_function_layout_from_parts(
         bytecode_region_start,
         bytecode_region_end,
     })
+}
+
+fn build_function_body_end_offsets(
+    functions: &[HermesFunction],
+    bytecode_region_end: u32,
+) -> Option<HashMap<u32, u32>> {
+    let mut unique_offsets = functions
+        .iter()
+        .map(|function| function.bytecode_offset)
+        .collect::<Vec<_>>();
+    unique_offsets.sort_unstable();
+    unique_offsets.dedup();
+
+    let mut body_end_by_offset = HashMap::with_capacity(unique_offsets.len());
+    for (index, start_offset) in unique_offsets.iter().copied().enumerate() {
+        let end_offset = unique_offsets
+            .get(index + 1)
+            .copied()
+            .unwrap_or(bytecode_region_end);
+        if end_offset < start_offset {
+            return None;
+        }
+        body_end_by_offset.insert(start_offset, end_offset);
+    }
+
+    Some(body_end_by_offset)
 }
 
 fn build_info_blocks(

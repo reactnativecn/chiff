@@ -8,6 +8,9 @@ const HERMES_HEADER_LEN: usize = 128;
 const RESYNC_ANCHOR_WINDOW: usize = 4;
 const RESYNC_MIN_MATCH_LEN: usize = 4;
 const RESYNC_MAX_POSITIONS_PER_KEY: usize = 8;
+const RESYNC_FULL_SCAN_MAX_REGION_LEN: usize = 256 * 1024;
+const RESYNC_MAX_REGION_LEN: usize = 8 * 1024 * 1024;
+const RESYNC_TARGET_SAMPLE_COUNT: usize = 16 * 1024;
 const HERMES_SECTION_ORDER: [HermesSectionKind; 15] = [
     HermesSectionKind::FunctionHeaders,
     HermesSectionKind::StringKinds,
@@ -175,27 +178,19 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
                 ..new_functions.bytecode_region_start as usize,
         );
 
-        let function_count = old_functions
-            .functions
-            .len()
-            .max(new_functions.functions.len());
+        let old_function_ranges = unique_function_body_ranges(&old_functions.functions);
+        let new_function_ranges = unique_function_body_ranges(&new_functions.functions);
+        let function_range_count = old_function_ranges.len().max(new_function_ranges.len());
 
-        for function_index in 0..function_count {
-            let old_range = old_functions
-                .functions
+        for function_index in 0..function_range_count {
+            let old_range = old_function_ranges
                 .get(function_index)
-                .map(|function| {
-                    function.bytecode_offset as usize..function.body_end_offset as usize
-                })
+                .cloned()
                 .unwrap_or(0..0);
-            let new_range = new_functions
-                .functions
+            let new_range = new_function_ranges
                 .get(function_index)
-                .map(|function| {
-                    function.bytecode_offset as usize..function.body_end_offset as usize
-                })
+                .cloned()
                 .unwrap_or(0..0);
-
             append_region_diff(&mut ops, old, new, old_range, new_range);
         }
 
@@ -556,6 +551,18 @@ fn find_section_range(
         .map(|(_, range)| range.clone())
 }
 
+fn unique_function_body_ranges(
+    functions: &[crate::HermesFunction],
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = functions
+        .iter()
+        .map(|function| function.bytecode_offset as usize..function.body_end_offset as usize)
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| (range.start, range.end));
+    ranges.dedup_by(|rhs, lhs| rhs.start == lhs.start && rhs.end == lhs.end);
+    ranges
+}
+
 fn common_prefix_len(old: &[u8], new: &[u8]) -> usize {
     old.iter()
         .zip(new.iter())
@@ -577,16 +584,12 @@ fn common_suffix_len(old: &[u8], new: &[u8], prefix_len: usize) -> usize {
 }
 
 fn find_middle_anchor(old: &[u8], new: &[u8]) -> Option<MiddleAnchor> {
-    if old.len() < RESYNC_MIN_MATCH_LEN
-        || new.len() < RESYNC_MIN_MATCH_LEN
-        || old.len() < RESYNC_ANCHOR_WINDOW
-        || new.len() < RESYNC_ANCHOR_WINDOW
-    {
+    let Some(step) = middle_anchor_step(old.len(), new.len()) else {
         return None;
-    }
+    };
 
     let mut positions_by_key: HashMap<u32, Vec<usize>> = HashMap::new();
-    for old_start in 0..=old.len() - RESYNC_ANCHOR_WINDOW {
+    for old_start in sampled_starts(old.len(), step) {
         let key = window_key(&old[old_start..old_start + RESYNC_ANCHOR_WINDOW]);
         let positions = positions_by_key.entry(key).or_default();
         if positions.len() < RESYNC_MAX_POSITIONS_PER_KEY {
@@ -595,7 +598,7 @@ fn find_middle_anchor(old: &[u8], new: &[u8]) -> Option<MiddleAnchor> {
     }
 
     let mut best_match = None;
-    for new_start in 0..=new.len() - RESYNC_ANCHOR_WINDOW {
+    for new_start in sampled_starts(new.len(), step) {
         let key = window_key(&new[new_start..new_start + RESYNC_ANCHOR_WINDOW]);
         let Some(old_positions) = positions_by_key.get(&key) else {
             continue;
@@ -655,4 +658,71 @@ fn find_middle_anchor(old: &[u8], new: &[u8]) -> Option<MiddleAnchor> {
 fn window_key(window: &[u8]) -> u32 {
     debug_assert_eq!(window.len(), RESYNC_ANCHOR_WINDOW);
     u32::from_le_bytes(window.try_into().expect("window has fixed size"))
+}
+
+fn middle_anchor_step(old_len: usize, new_len: usize) -> Option<usize> {
+    if old_len < RESYNC_MIN_MATCH_LEN
+        || new_len < RESYNC_MIN_MATCH_LEN
+        || old_len < RESYNC_ANCHOR_WINDOW
+        || new_len < RESYNC_ANCHOR_WINDOW
+    {
+        return None;
+    }
+
+    let max_len = old_len.max(new_len);
+    if max_len > RESYNC_MAX_REGION_LEN {
+        return None;
+    }
+
+    if max_len <= RESYNC_FULL_SCAN_MAX_REGION_LEN {
+        return Some(1);
+    }
+
+    Some((max_len / RESYNC_TARGET_SAMPLE_COUNT).max(1))
+}
+
+fn sampled_starts(len: usize, step: usize) -> Vec<usize> {
+    debug_assert!(step > 0);
+    debug_assert!(len >= RESYNC_ANCHOR_WINDOW);
+
+    let last_start = len - RESYNC_ANCHOR_WINDOW;
+    let mut starts = Vec::new();
+    let mut cursor = 0usize;
+    while cursor <= last_start {
+        starts.push(cursor);
+        cursor = cursor.saturating_add(step);
+    }
+
+    if starts.last().copied() != Some(last_start) {
+        starts.push(last_start);
+    }
+
+    starts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{middle_anchor_step, sampled_starts};
+
+    #[test]
+    fn middle_anchor_uses_full_scan_for_small_regions() {
+        assert_eq!(middle_anchor_step(64, 96), Some(1));
+    }
+
+    #[test]
+    fn middle_anchor_uses_sampling_for_large_regions() {
+        let step = middle_anchor_step(512 * 1024, 512 * 1024).unwrap();
+        assert!(step > 1);
+    }
+
+    #[test]
+    fn middle_anchor_is_disabled_for_oversized_regions() {
+        assert_eq!(middle_anchor_step(8 * 1024 * 1024 + 1, 128), None);
+        assert_eq!(middle_anchor_step(128, 8 * 1024 * 1024 + 1), None);
+    }
+
+    #[test]
+    fn sampled_starts_include_region_end() {
+        assert_eq!(sampled_starts(20, 7), vec![0, 7, 14, 16]);
+    }
 }

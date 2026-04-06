@@ -80,7 +80,12 @@ Bindings should only expose stable library APIs.
 - [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
 - [benches/diff_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/diff_cases.rs): synthetic benchmark harness for diff/apply cases
 - [examples/diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/diff_stats.rs): quick CLI-style inspection for format detection and patch stats
+- [examples/corpus_diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/corpus_diff_stats.rs): directory-pair runner for real corpus diff stats
+- [examples/hermes_region_report.rs](/Users/sunny/Documents/workspace/chiff/examples/hermes_region_report.rs): Hermes-specific region diagnostics for section, gap, function, and info-block churn
 - [bindings/node/native/src/lib.rs](/Users/sunny/Documents/workspace/chiff/bindings/node/native/src/lib.rs): Node-API binding
+- [bindings/node/scripts/corpus-diff-stats.cjs](/Users/sunny/Documents/workspace/chiff/bindings/node/scripts/corpus-diff-stats.cjs): Node/Bun directory-pair runner built on `detectFormat` and `diffStats`
+- [fixtures/generated/testHotUpdate/android/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/README.md): real generated Android bundle fixtures copied from the `react-native-update` example app
+- [fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md): real old/new Android fixture pair produced from a minimal UI-string change
 
 ### Public model
 
@@ -97,6 +102,31 @@ Bindings should only expose stable library APIs.
 
 This IR is intentionally small for the current phase.
 It is enough to validate structural diff behavior before introducing more advanced operations.
+
+## Real Fixture Corpus
+
+`chiff` now includes a real generated Android fixture pair copied from:
+
+- `/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate`
+
+The corpus currently contains:
+
+- a release-mode text bundle at [fixtures/generated/testHotUpdate/android/text/index.android.bundle](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/text/index.android.bundle)
+- a Hermes bytecode bundle at [fixtures/generated/testHotUpdate/android/hermes/index.android.hbc](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/hermes/index.android.hbc)
+- a real old/new pair at [fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md)
+
+This corpus is not yet a versioned old/new diff benchmark set.
+It is currently used for:
+
+- real artifact format-detection validation
+- real bundle size and checksum tracking
+- future directory-pair diff-stat and patch-size regression runs
+
+The first real mutation pair currently shows:
+
+- text diff is already efficient for a minimal string edit
+- Hermes function layout on real bundles required support for non-monotonic and duplicate overflowed bytecode offsets
+- the dominant remaining Hermes churn is in the trailing `debug_info` region, not in function bodies
 
 ## Current Hermes Model
 
@@ -219,9 +249,11 @@ The following milestones are complete:
 - per-info-block Hermes diff for overflowed function metadata
 - per-subregion Hermes diff for overflowed info metadata, so unchanged exception tables can survive changed large-header/debug payloads
 - middle-anchor resync inside diff regions, so unchanged interior byte runs can survive changed prefixes and suffixes
+- support for real-world overflowed Hermes function headers where bytecode offsets are non-monotonic or duplicated across headers
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Rust crate verification
 - Node and Bun smoke-test verification through one Node-API addon
+- real generated text/Hermes Android fixtures and one real old/new mutation pair from the `react-native-update` example app
 
 ## Current Limits
 
@@ -253,7 +285,13 @@ It does not yet understand:
 - operand classes
 - Hermes delta-relative operand normalization
 
-### 3. Text diff is still conservative
+### 3. Debug-info diff is still coarse
+
+The first real Hermes mutation pair shows that `debug_info` dominates both patch size and diff time even when function bodies do not change.
+`chiff` currently treats the full trailing debug region as one large byte slice and relies on generic resynchronization inside it.
+The next meaningful Hermes optimization should target debug-info structure directly.
+
+### 4. Text diff is still conservative
 
 UTF-8 text currently uses the same prefix/suffix byte strategy.
 It now performs a conservative middle-anchor resync, but it still does not perform:

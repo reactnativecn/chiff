@@ -343,6 +343,63 @@ fn hermes_overflow_function_bytes(function_bodies: &[&[u8]]) -> Vec<u8> {
     bytes
 }
 
+fn hermes_overflow_function_bytes_with_header_map(
+    function_bodies: &[&[u8]],
+    header_body_indices: &[usize],
+) -> Vec<u8> {
+    assert_eq!(function_bodies.len(), 2);
+    assert_eq!(header_body_indices.len(), 3);
+
+    let header_len = 128usize;
+    let function_headers_len = header_body_indices.len() * 12;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_end =
+        bytecode_start + function_bodies.iter().map(|body| body.len()).sum::<usize>();
+    let info_start = align4(bytecode_end);
+
+    let mut info_offset = info_start;
+    let mut large_header_offsets = Vec::with_capacity(header_body_indices.len());
+    for _ in header_body_indices {
+        large_header_offsets.push(info_offset);
+        info_offset = align4(info_offset + 36);
+    }
+
+    let debug_info_offset = info_offset;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = hermes_header_bytes(HeaderSpec {
+        file_length: file_length as u32,
+        function_count: header_body_indices.len() as u32,
+        debug_info_offset: debug_info_offset as u32,
+        ..HeaderSpec::default()
+    });
+
+    let first_body_offset = bytecode_start as u32;
+    let second_body_offset = first_body_offset + function_bodies[0].len() as u32;
+    let body_offsets = [first_body_offset, second_body_offset];
+
+    bytes[first_body_offset as usize..first_body_offset as usize + function_bodies[0].len()]
+        .copy_from_slice(function_bodies[0]);
+    bytes[second_body_offset as usize..second_body_offset as usize + function_bodies[1].len()]
+        .copy_from_slice(function_bodies[1]);
+
+    for (index, body_index) in header_body_indices.iter().copied().enumerate() {
+        let header = overflow_function_header(large_header_offsets[index] as u32);
+        let header_offset = header_len + index * 12;
+        bytes[header_offset..header_offset + 12].copy_from_slice(&header);
+
+        let large_header = large_function_header(
+            body_offsets[body_index],
+            function_bodies[body_index].len() as u32,
+        );
+        let large_header_offset = large_header_offsets[index];
+        bytes[large_header_offset..large_header_offset + 36].copy_from_slice(&large_header);
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xEE);
+    bytes
+}
+
 fn hermes_overflow_function_bytes_with_debug(
     function_bodies: &[&[u8]],
     debug_offsets: &[Option<u32>],
@@ -937,6 +994,86 @@ fn parses_overflowed_function_layout_from_large_headers() {
             ],
             bytecode_region_start: 152,
             bytecode_region_end: 160,
+        })
+    );
+}
+
+#[test]
+fn parses_overflowed_function_layout_with_non_monotonic_duplicate_offsets() {
+    let bytes = hermes_overflow_function_bytes_with_header_map(
+        &[b"\x21\x22\x23", b"\x31\x32\x33\x34"],
+        &[1, 0, 1],
+    );
+
+    assert_eq!(
+        parse_function_layout(&bytes),
+        Some(HermesFunctionLayout {
+            functions: vec![
+                HermesFunction {
+                    index: 0,
+                    header_offset: 128,
+                    bytecode_offset: 167,
+                    bytecode_size: 4,
+                    body_end_offset: 172,
+                },
+                HermesFunction {
+                    index: 1,
+                    header_offset: 140,
+                    bytecode_offset: 164,
+                    bytecode_size: 3,
+                    body_end_offset: 167,
+                },
+                HermesFunction {
+                    index: 2,
+                    header_offset: 152,
+                    bytecode_offset: 167,
+                    bytecode_size: 4,
+                    body_end_offset: 172,
+                },
+            ],
+            info_blocks: vec![
+                HermesFunctionInfoBlock {
+                    index: 0,
+                    offset: 172,
+                    large_header_end_offset: 208,
+                    exception_table_offset: None,
+                    exception_table_end_offset: None,
+                    debug_offsets_offset: None,
+                    debug_offsets_end_offset: None,
+                    payload_end_offset: 208,
+                    end_offset: 208,
+                    has_exception_handlers: false,
+                    has_debug_offsets: false,
+                },
+                HermesFunctionInfoBlock {
+                    index: 1,
+                    offset: 208,
+                    large_header_end_offset: 244,
+                    exception_table_offset: None,
+                    exception_table_end_offset: None,
+                    debug_offsets_offset: None,
+                    debug_offsets_end_offset: None,
+                    payload_end_offset: 244,
+                    end_offset: 244,
+                    has_exception_handlers: false,
+                    has_debug_offsets: false,
+                },
+                HermesFunctionInfoBlock {
+                    index: 2,
+                    offset: 244,
+                    large_header_end_offset: 280,
+                    exception_table_offset: None,
+                    exception_table_end_offset: None,
+                    debug_offsets_offset: None,
+                    debug_offsets_end_offset: None,
+                    payload_end_offset: 280,
+                    end_offset: 280,
+                    has_exception_handlers: false,
+                    has_debug_offsets: false,
+                },
+            ],
+            bytecode_region_start: 164,
+            bytecode_region_end: 172,
         })
     );
 }
