@@ -111,6 +111,25 @@ fn small_function_header(offset: u32, bytecode_size: u32) -> [u8; 12] {
     bytes
 }
 
+fn small_function_header_with_info(
+    offset: u32,
+    bytecode_size: u32,
+    info_offset: u32,
+    has_exception_handlers: bool,
+    has_debug_offsets: bool,
+) -> [u8; 12] {
+    let mut bytes = small_function_header(offset, bytecode_size);
+    let word3 = info_offset & 0x00FF_FFFF;
+    bytes[8..12].copy_from_slice(&word3.to_le_bytes());
+    if has_exception_handlers {
+        bytes[11] |= 1 << 3;
+    }
+    if has_debug_offsets {
+        bytes[11] |= 1 << 4;
+    }
+    bytes
+}
+
 fn overflow_function_header(large_header_offset: u32) -> [u8; 12] {
     let mut bytes = [0u8; 12];
     let low = large_header_offset & 0x00FF_FFFF;
@@ -171,6 +190,109 @@ fn hermes_small_function_bytes(function_bodies: &[&[u8]]) -> Vec<u8> {
     }
 
     bytes[debug_info_offset..file_length].fill(0xEE);
+    bytes
+}
+
+fn hermes_small_function_bytes_with_info(
+    function_bodies: &[&[u8]],
+    exception_handler_counts: &[Option<u32>],
+    debug_offsets: &[Option<u32>],
+) -> Vec<u8> {
+    assert_eq!(function_bodies.len(), exception_handler_counts.len());
+    assert_eq!(function_bodies.len(), debug_offsets.len());
+
+    let header_len = 128usize;
+    let function_headers_len = function_bodies.len() * 12;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_end =
+        bytecode_start + function_bodies.iter().map(|body| body.len()).sum::<usize>();
+    let info_start = align4(bytecode_end);
+
+    let mut info_offset = info_start;
+    let mut info_offsets = vec![None; function_bodies.len()];
+    for (index, (exception_count, debug_offset)) in exception_handler_counts
+        .iter()
+        .zip(debug_offsets)
+        .enumerate()
+    {
+        if exception_count.is_some() || debug_offset.is_some() {
+            info_offsets[index] = Some(info_offset);
+            let mut block_end = info_offset;
+            if let Some(exception_count) = exception_count {
+                block_end = align4(block_end);
+                block_end += 4 + *exception_count as usize * 12;
+            }
+            if debug_offset.is_some() {
+                block_end = align4(block_end);
+                block_end += 4;
+            }
+            info_offset = align4(block_end);
+        }
+    }
+
+    let debug_info_offset = info_offset;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = hermes_header_bytes(HeaderSpec {
+        file_length: file_length as u32,
+        function_count: function_bodies.len() as u32,
+        debug_info_offset: debug_info_offset as u32,
+        ..HeaderSpec::default()
+    });
+
+    let mut body_offset = bytecode_start as u32;
+    for (index, body) in function_bodies.iter().enumerate() {
+        let header = match info_offsets[index] {
+            Some(info_offset) => small_function_header_with_info(
+                body_offset,
+                body.len() as u32,
+                info_offset as u32,
+                exception_handler_counts[index].is_some(),
+                debug_offsets[index].is_some(),
+            ),
+            None => small_function_header(body_offset, body.len() as u32),
+        };
+        let header_offset = header_len + index * 12;
+        bytes[header_offset..header_offset + 12].copy_from_slice(&header);
+        bytes[body_offset as usize..body_offset as usize + body.len()].copy_from_slice(body);
+        body_offset += body.len() as u32;
+    }
+
+    for (index, info_offset) in info_offsets.into_iter().enumerate() {
+        let Some(mut cursor) = info_offset else {
+            continue;
+        };
+        if let Some(exception_count) = exception_handler_counts[index] {
+            cursor = align4(cursor);
+            bytes[cursor..cursor + 4].copy_from_slice(&exception_count.to_le_bytes());
+            let mut entry_cursor = cursor + 4;
+            for entry_index in 0..exception_count as usize {
+                let entry = [
+                    (0xC0 + index as u8),
+                    entry_index as u8,
+                    0xA0,
+                    0xA1,
+                    0xA2,
+                    0xA3,
+                    0xA4,
+                    0xA5,
+                    0xA6,
+                    0xA7,
+                    0xA8,
+                    0xA9,
+                ];
+                bytes[entry_cursor..entry_cursor + 12].copy_from_slice(&entry);
+                entry_cursor += 12;
+            }
+            cursor = entry_cursor;
+        }
+        if let Some(debug_offset) = debug_offsets[index] {
+            cursor = align4(cursor);
+            bytes[cursor..cursor + 4].copy_from_slice(&debug_offset.to_le_bytes());
+        }
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xEB);
     bytes
 }
 
@@ -697,6 +819,67 @@ fn parse_artifact_exposes_small_function_layout() {
             info_blocks: vec![],
             bytecode_region_start: 152,
             bytecode_region_end: 155,
+        })
+    );
+}
+
+#[test]
+fn parses_small_function_info_blocks_with_exception_handlers_and_debug_offsets() {
+    let bytes = hermes_small_function_bytes_with_info(
+        &[b"\x11\x12", b"\x21\x22\x23"],
+        &[Some(1), None],
+        &[Some(0x0102_0304), Some(0x0506_0708)],
+    );
+
+    assert_eq!(
+        parse_function_layout(&bytes),
+        Some(HermesFunctionLayout {
+            functions: vec![
+                HermesFunction {
+                    index: 0,
+                    header_offset: 128,
+                    bytecode_offset: 152,
+                    bytecode_size: 2,
+                    body_end_offset: 154,
+                },
+                HermesFunction {
+                    index: 1,
+                    header_offset: 140,
+                    bytecode_offset: 154,
+                    bytecode_size: 3,
+                    body_end_offset: 160,
+                },
+            ],
+            info_blocks: vec![
+                HermesFunctionInfoBlock {
+                    index: 0,
+                    offset: 160,
+                    large_header_end_offset: 160,
+                    exception_table_offset: Some(160),
+                    exception_table_end_offset: Some(176),
+                    debug_offsets_offset: Some(176),
+                    debug_offsets_end_offset: Some(180),
+                    payload_end_offset: 180,
+                    end_offset: 180,
+                    has_exception_handlers: true,
+                    has_debug_offsets: true,
+                },
+                HermesFunctionInfoBlock {
+                    index: 1,
+                    offset: 180,
+                    large_header_end_offset: 180,
+                    exception_table_offset: None,
+                    exception_table_end_offset: None,
+                    debug_offsets_offset: Some(180),
+                    debug_offsets_end_offset: Some(184),
+                    payload_end_offset: 184,
+                    end_offset: 184,
+                    has_exception_handlers: false,
+                    has_debug_offsets: true,
+                },
+            ],
+            bytecode_region_start: 152,
+            bytecode_region_end: 160,
         })
     );
 }

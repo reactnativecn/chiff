@@ -2,8 +2,12 @@ use crate::{
     parse_artifact, select_engine, EngineKind, HermesFunctionInfoBlock, HermesSection,
     HermesSectionKind,
 };
+use std::collections::HashMap;
 
 const HERMES_HEADER_LEN: usize = 128;
+const RESYNC_ANCHOR_WINDOW: usize = 4;
+const RESYNC_MIN_MATCH_LEN: usize = 4;
+const RESYNC_MAX_POSITIONS_PER_KEY: usize = 8;
 const HERMES_SECTION_ORDER: [HermesSectionKind; 15] = [
     HermesSectionKind::FunctionHeaders,
     HermesSectionKind::StringKinds,
@@ -31,6 +35,15 @@ pub enum PatchOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Patch {
     pub ops: Vec<PatchOp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatchStats {
+    pub op_count: usize,
+    pub copy_op_count: usize,
+    pub insert_op_count: usize,
+    pub copied_bytes: usize,
+    pub inserted_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +84,33 @@ pub fn diff_bytes(old: &[u8], new: &[u8]) -> Patch {
             diff_hermes_bytes(old, new).unwrap_or_else(|| diff_generic_bytes(old, new))
         }
         EngineKind::Text | EngineKind::GenericBinary => diff_generic_bytes(old, new),
+    }
+}
+
+impl Patch {
+    pub fn stats(&self) -> PatchStats {
+        let mut stats = PatchStats {
+            op_count: self.ops.len(),
+            copy_op_count: 0,
+            insert_op_count: 0,
+            copied_bytes: 0,
+            inserted_bytes: 0,
+        };
+
+        for op in &self.ops {
+            match op {
+                PatchOp::Copy { len, .. } => {
+                    stats.copy_op_count += 1;
+                    stats.copied_bytes += len;
+                }
+                PatchOp::Insert(bytes) => {
+                    stats.insert_op_count += 1;
+                    stats.inserted_bytes += bytes.len();
+                }
+            }
+        }
+
+        stats
     }
 }
 
@@ -320,6 +360,13 @@ struct HermesInfoBlockRanges {
     trailing_padding: std::ops::Range<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MiddleAnchor {
+    old_start: usize,
+    new_start: usize,
+    len: usize,
+}
+
 fn info_block_ranges(block: Option<&HermesFunctionInfoBlock>) -> HermesInfoBlockRanges {
     let Some(block) = block else {
         return HermesInfoBlockRanges {
@@ -370,11 +417,63 @@ fn info_block_ranges(block: Option<&HermesFunctionInfoBlock>) -> HermesInfoBlock
 }
 
 fn append_prefix_suffix_diff(ops: &mut Vec<PatchOp>, old: &[u8], new: &[u8], old_base: usize) {
+    append_resync_diff(ops, old, new, old_base);
+}
+
+fn append_resync_diff(ops: &mut Vec<PatchOp>, old: &[u8], new: &[u8], old_base: usize) {
     let prefix_len = common_prefix_len(old, new);
     let suffix_len = common_suffix_len(old, new, prefix_len);
 
     let old_mid_end = old.len() - suffix_len;
     let new_mid_end = new.len() - suffix_len;
+    let old_mid = &old[prefix_len..old_mid_end];
+    let new_mid = &new[prefix_len..new_mid_end];
+
+    if let Some(anchor) = find_middle_anchor(old_mid, new_mid) {
+        if prefix_len > 0 {
+            push_op(
+                ops,
+                PatchOp::Copy {
+                    offset: old_base,
+                    len: prefix_len,
+                },
+            );
+        }
+
+        append_resync_diff(
+            ops,
+            &old_mid[..anchor.old_start],
+            &new_mid[..anchor.new_start],
+            old_base + prefix_len,
+        );
+
+        push_op(
+            ops,
+            PatchOp::Copy {
+                offset: old_base + prefix_len + anchor.old_start,
+                len: anchor.len,
+            },
+        );
+
+        append_resync_diff(
+            ops,
+            &old_mid[anchor.old_start + anchor.len..],
+            &new_mid[anchor.new_start + anchor.len..],
+            old_base + prefix_len + anchor.old_start + anchor.len,
+        );
+
+        if suffix_len > 0 {
+            push_op(
+                ops,
+                PatchOp::Copy {
+                    offset: old_base + old_mid_end,
+                    len: suffix_len,
+                },
+            );
+        }
+        return;
+    }
+
     let mut emitted = false;
 
     if prefix_len > 0 {
@@ -475,4 +574,85 @@ fn common_suffix_len(old: &[u8], new: &[u8], prefix_len: usize) -> usize {
         .zip(new[new.len().saturating_sub(max_suffix_len)..].iter().rev())
         .take_while(|(lhs, rhs)| lhs == rhs)
         .count()
+}
+
+fn find_middle_anchor(old: &[u8], new: &[u8]) -> Option<MiddleAnchor> {
+    if old.len() < RESYNC_MIN_MATCH_LEN
+        || new.len() < RESYNC_MIN_MATCH_LEN
+        || old.len() < RESYNC_ANCHOR_WINDOW
+        || new.len() < RESYNC_ANCHOR_WINDOW
+    {
+        return None;
+    }
+
+    let mut positions_by_key: HashMap<u32, Vec<usize>> = HashMap::new();
+    for old_start in 0..=old.len() - RESYNC_ANCHOR_WINDOW {
+        let key = window_key(&old[old_start..old_start + RESYNC_ANCHOR_WINDOW]);
+        let positions = positions_by_key.entry(key).or_default();
+        if positions.len() < RESYNC_MAX_POSITIONS_PER_KEY {
+            positions.push(old_start);
+        }
+    }
+
+    let mut best_match = None;
+    for new_start in 0..=new.len() - RESYNC_ANCHOR_WINDOW {
+        let key = window_key(&new[new_start..new_start + RESYNC_ANCHOR_WINDOW]);
+        let Some(old_positions) = positions_by_key.get(&key) else {
+            continue;
+        };
+
+        for &old_start in old_positions {
+            let mut start_old = old_start;
+            let mut start_new = new_start;
+            let mut end_old = old_start + RESYNC_ANCHOR_WINDOW;
+            let mut end_new = new_start + RESYNC_ANCHOR_WINDOW;
+
+            while start_old > 0 && start_new > 0 && old[start_old - 1] == new[start_new - 1] {
+                start_old -= 1;
+                start_new -= 1;
+            }
+
+            while end_old < old.len() && end_new < new.len() && old[end_old] == new[end_new] {
+                end_old += 1;
+                end_new += 1;
+            }
+
+            let candidate = MiddleAnchor {
+                old_start: start_old,
+                new_start: start_new,
+                len: end_old - start_old,
+            };
+
+            if candidate.len < RESYNC_MIN_MATCH_LEN {
+                continue;
+            }
+
+            let replace_whole_region = candidate.old_start == 0
+                && candidate.new_start == 0
+                && candidate.len == old.len().min(new.len());
+            if replace_whole_region {
+                continue;
+            }
+
+            let should_replace_best = best_match
+                .map(|best: MiddleAnchor| {
+                    candidate.len > best.len
+                        || (candidate.len == best.len
+                            && candidate.old_start + candidate.new_start
+                                < best.old_start + best.new_start)
+                })
+                .unwrap_or(true);
+
+            if should_replace_best {
+                best_match = Some(candidate);
+            }
+        }
+    }
+
+    best_match
+}
+
+fn window_key(window: &[u8]) -> u32 {
+    debug_assert_eq!(window.len(), RESYNC_ANCHOR_WINDOW);
+    u32::from_le_bytes(window.try_into().expect("window has fixed size"))
 }

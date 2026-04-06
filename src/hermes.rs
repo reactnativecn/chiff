@@ -4,6 +4,7 @@ const HERMES_HEADER_LEN: usize = 128;
 const BYTECODE_ALIGNMENT: u32 = 4;
 const SMALL_FUNCTION_OFFSET_MASK: u32 = (1 << 25) - 1;
 const SMALL_FUNCTION_BYTECODE_SIZE_MASK: u32 = (1 << 14) - 1;
+const SMALL_FUNCTION_INFO_OFFSET_MASK: u32 = (1 << 24) - 1;
 const OVERFLOWED_FUNCTION_HEADER_OFFSET_MASK: u32 = (1 << 24) - 1;
 const SMALL_FUNCTION_NAME_SHIFT: u32 = 14;
 const SMALL_FUNCTION_NAME_MASK: u32 = 0xFF;
@@ -146,6 +147,15 @@ pub struct HermesArtifact {
     pub payload_len: usize,
     pub section_layout: HermesSectionLayout,
     pub function_layout: Option<HermesFunctionLayout>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawFunctionInfoBlock {
+    function_index: u32,
+    offset: u32,
+    large_header_end_offset: u32,
+    has_exception_handlers: bool,
+    has_debug_offsets: bool,
 }
 
 pub fn parse_artifact(bytes: &[u8]) -> Option<HermesArtifact> {
@@ -390,6 +400,7 @@ fn parse_function_layout_from_parts(
 
         let word1 = u32::from_le_bytes(raw_header.get(0..4)?.try_into().ok()?);
         let word2 = u32::from_le_bytes(raw_header.get(4..8)?.try_into().ok()?);
+        let word3 = u32::from_le_bytes(raw_header.get(8..12)?.try_into().ok()?);
         let (bytecode_offset, bytecode_size) = if flags & FUNCTION_HEADER_OVERFLOWED_MASK != 0 {
             let large_header_offset = decode_large_header_offset(word1, word2);
             if large_header_offset < section_layout.structured_end_offset
@@ -406,12 +417,16 @@ fn parse_function_layout_from_parts(
             bytecode_region_end = bytecode_region_end.min(large_header_offset);
             let large_flags =
                 *bytes.get(large_header_offset as usize + LARGE_FUNC_HEADER_FLAGS_OFFSET)?;
-            raw_info_blocks.push((
-                index,
-                large_header_offset,
-                large_flags & FUNCTION_HEADER_HAS_EXCEPTION_HANDLER_MASK != 0,
-                large_flags & FUNCTION_HEADER_HAS_DEBUG_INFO_MASK != 0,
-            ));
+            let has_exception_handlers =
+                large_flags & FUNCTION_HEADER_HAS_EXCEPTION_HANDLER_MASK != 0;
+            let has_debug_offsets = large_flags & FUNCTION_HEADER_HAS_DEBUG_INFO_MASK != 0;
+            raw_info_blocks.push(RawFunctionInfoBlock {
+                function_index: index,
+                offset: large_header_offset,
+                large_header_end_offset: large_header_offset.checked_add(LARGE_FUNC_HEADER_SIZE)?,
+                has_exception_handlers,
+                has_debug_offsets,
+            });
 
             (
                 read_u32_at_u32(bytes, large_header_offset, LARGE_FUNC_HEADER_OFFSET_OFFSET)?,
@@ -422,6 +437,26 @@ fn parse_function_layout_from_parts(
                 )?,
             )
         } else {
+            let has_exception_handlers = flags & FUNCTION_HEADER_HAS_EXCEPTION_HANDLER_MASK != 0;
+            let has_debug_offsets = flags & FUNCTION_HEADER_HAS_DEBUG_INFO_MASK != 0;
+            if has_exception_handlers || has_debug_offsets {
+                let info_offset = word3 & SMALL_FUNCTION_INFO_OFFSET_MASK;
+                if info_offset < section_layout.structured_end_offset
+                    || info_offset >= header.debug_info_offset
+                    || info_offset % BYTECODE_ALIGNMENT != 0
+                {
+                    return None;
+                }
+                bytecode_region_end = bytecode_region_end.min(info_offset);
+                raw_info_blocks.push(RawFunctionInfoBlock {
+                    function_index: index,
+                    offset: info_offset,
+                    large_header_end_offset: info_offset,
+                    has_exception_handlers,
+                    has_debug_offsets,
+                });
+            }
+
             (
                 word1 & SMALL_FUNCTION_OFFSET_MASK,
                 word2 & SMALL_FUNCTION_BYTECODE_SIZE_MASK,
@@ -458,6 +493,7 @@ fn parse_function_layout_from_parts(
     } else {
         bytecode_region_end
     };
+    raw_info_blocks.sort_by_key(|block| block.offset);
     let info_blocks = build_info_blocks(bytes, header, &raw_info_blocks)?;
 
     for function_index in 0..functions.len() {
@@ -488,14 +524,13 @@ fn parse_function_layout_from_parts(
 fn build_info_blocks(
     bytes: &[u8],
     header: &HermesHeader,
-    raw_info_blocks: &[(u32, u32, bool, bool)],
+    raw_info_blocks: &[RawFunctionInfoBlock],
 ) -> Option<Vec<HermesFunctionInfoBlock>> {
     let mut info_blocks = Vec::with_capacity(raw_info_blocks.len());
     let mut previous_offset = 0u32;
 
-    for (index, &(function_index, offset, has_exception_handlers, has_debug_offsets)) in
-        raw_info_blocks.iter().enumerate()
-    {
+    for (index, raw_info_block) in raw_info_blocks.iter().enumerate() {
+        let offset = raw_info_block.offset;
         if offset < previous_offset {
             return None;
         }
@@ -503,18 +538,19 @@ fn build_info_blocks(
 
         let end_offset = raw_info_blocks
             .get(index + 1)
-            .map(|(_, next_offset, _, _)| *next_offset)
+            .map(|next| next.offset)
             .unwrap_or(header.debug_info_offset);
         let parsed_info = parse_function_info_payload(
             bytes,
             offset,
+            raw_info_block.large_header_end_offset,
             end_offset,
-            has_exception_handlers,
-            has_debug_offsets,
+            raw_info_block.has_exception_handlers,
+            raw_info_block.has_debug_offsets,
         )?;
 
         info_blocks.push(HermesFunctionInfoBlock {
-            index: function_index,
+            index: raw_info_block.function_index,
             offset,
             large_header_end_offset: parsed_info.large_header_end_offset,
             exception_table_offset: parsed_info.exception_table_offset,
@@ -523,8 +559,8 @@ fn build_info_blocks(
             debug_offsets_end_offset: parsed_info.debug_offsets_end_offset,
             payload_end_offset: parsed_info.payload_end_offset,
             end_offset,
-            has_exception_handlers,
-            has_debug_offsets,
+            has_exception_handlers: raw_info_block.has_exception_handlers,
+            has_debug_offsets: raw_info_block.has_debug_offsets,
         });
     }
 
@@ -543,16 +579,21 @@ struct ParsedFunctionInfoPayload {
 fn parse_function_info_payload(
     bytes: &[u8],
     info_offset: u32,
+    payload_start_offset: u32,
     max_end_offset: u32,
     has_exception_handlers: bool,
     has_debug_offsets: bool,
 ) -> Option<ParsedFunctionInfoPayload> {
-    let large_header_end_offset = info_offset.checked_add(LARGE_FUNC_HEADER_SIZE)?;
-    let mut cursor = large_header_end_offset;
+    let large_header_end_offset = payload_start_offset;
+    let mut cursor = payload_start_offset;
     let mut exception_table_offset = None;
     let mut exception_table_end_offset = None;
     let mut debug_offsets_offset = None;
     let mut debug_offsets_end_offset = None;
+
+    if large_header_end_offset < info_offset || large_header_end_offset > max_end_offset {
+        return None;
+    }
 
     if has_exception_handlers {
         cursor = align_to(cursor, BYTECODE_ALIGNMENT)?;

@@ -1,4 +1,4 @@
-use chiff::{apply_patch, diff_bytes, Patch, PatchError, PatchOp};
+use chiff::{apply_patch, diff_bytes, Patch, PatchError, PatchOp, PatchStats};
 
 const HERMES_MAGIC: u64 = 0x1F19_03C1_03BC_1FC6;
 
@@ -65,6 +65,25 @@ fn small_function_header(offset: u32, bytecode_size: u32) -> [u8; 12] {
     bytes
 }
 
+fn small_function_header_with_info(
+    offset: u32,
+    bytecode_size: u32,
+    info_offset: u32,
+    has_exception_handlers: bool,
+    has_debug_offsets: bool,
+) -> [u8; 12] {
+    let mut bytes = small_function_header(offset, bytecode_size);
+    let word3 = info_offset & 0x00FF_FFFF;
+    bytes[8..12].copy_from_slice(&word3.to_le_bytes());
+    if has_exception_handlers {
+        bytes[11] |= 1 << 3;
+    }
+    if has_debug_offsets {
+        bytes[11] |= 1 << 4;
+    }
+    bytes
+}
+
 fn overflow_function_header(large_header_offset: u32) -> [u8; 12] {
     let mut bytes = [0u8; 12];
     let low = large_header_offset & 0x00FF_FFFF;
@@ -125,6 +144,109 @@ fn hermes_small_function_bytes(function_bodies: &[&[u8]]) -> Vec<u8> {
     }
 
     bytes[debug_info_offset..file_length].fill(0xFE);
+    bytes
+}
+
+fn hermes_small_function_bytes_with_info(
+    function_bodies: &[&[u8]],
+    exception_handler_counts: &[Option<u32>],
+    debug_offsets: &[Option<u32>],
+) -> Vec<u8> {
+    assert_eq!(function_bodies.len(), exception_handler_counts.len());
+    assert_eq!(function_bodies.len(), debug_offsets.len());
+
+    let header_len = 128usize;
+    let function_headers_len = function_bodies.len() * 12;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_end =
+        bytecode_start + function_bodies.iter().map(|body| body.len()).sum::<usize>();
+    let info_start = align4(bytecode_end);
+
+    let mut info_offset = info_start;
+    let mut info_offsets = vec![None; function_bodies.len()];
+    for (index, (exception_count, debug_offset)) in exception_handler_counts
+        .iter()
+        .zip(debug_offsets)
+        .enumerate()
+    {
+        if exception_count.is_some() || debug_offset.is_some() {
+            info_offsets[index] = Some(info_offset);
+            let mut block_end = info_offset;
+            if let Some(exception_count) = exception_count {
+                block_end = align4(block_end);
+                block_end += 4 + *exception_count as usize * 12;
+            }
+            if debug_offset.is_some() {
+                block_end = align4(block_end);
+                block_end += 4;
+            }
+            info_offset = align4(block_end);
+        }
+    }
+
+    let debug_info_offset = info_offset;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = vec![0; file_length];
+    bytes[0..8].copy_from_slice(&HERMES_MAGIC.to_le_bytes());
+    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[40..44].copy_from_slice(&(function_bodies.len() as u32).to_le_bytes());
+    bytes[108..112].copy_from_slice(&(debug_info_offset as u32).to_le_bytes());
+
+    let mut body_offset = bytecode_start as u32;
+    for (index, body) in function_bodies.iter().enumerate() {
+        let header = match info_offsets[index] {
+            Some(info_offset) => small_function_header_with_info(
+                body_offset,
+                body.len() as u32,
+                info_offset as u32,
+                exception_handler_counts[index].is_some(),
+                debug_offsets[index].is_some(),
+            ),
+            None => small_function_header(body_offset, body.len() as u32),
+        };
+        let header_offset = header_len + index * 12;
+        bytes[header_offset..header_offset + 12].copy_from_slice(&header);
+        bytes[body_offset as usize..body_offset as usize + body.len()].copy_from_slice(body);
+        body_offset += body.len() as u32;
+    }
+
+    for (index, info_offset) in info_offsets.into_iter().enumerate() {
+        let Some(mut cursor) = info_offset else {
+            continue;
+        };
+        if let Some(exception_count) = exception_handler_counts[index] {
+            cursor = align4(cursor);
+            bytes[cursor..cursor + 4].copy_from_slice(&exception_count.to_le_bytes());
+            let mut entry_cursor = cursor + 4;
+            for entry_index in 0..exception_count as usize {
+                let entry = [
+                    (0xC0 + index as u8),
+                    entry_index as u8,
+                    0xA0,
+                    0xA1,
+                    0xA2,
+                    0xA3,
+                    0xA4,
+                    0xA5,
+                    0xA6,
+                    0xA7,
+                    0xA8,
+                    0xA9,
+                ];
+                bytes[entry_cursor..entry_cursor + 12].copy_from_slice(&entry);
+                entry_cursor += 12;
+            }
+            cursor = entry_cursor;
+        }
+        if let Some(debug_offset) = debug_offsets[index] {
+            cursor = align4(cursor);
+            bytes[cursor..cursor + 4].copy_from_slice(&debug_offset.to_le_bytes());
+        }
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xFB);
     bytes
 }
 
@@ -312,6 +434,28 @@ fn apply_patch_rejects_out_of_bounds_copy() {
 }
 
 #[test]
+fn patch_stats_reports_copy_and_insert_totals() {
+    let patch = Patch {
+        ops: vec![
+            PatchOp::Copy { offset: 2, len: 4 },
+            PatchOp::Insert(b"rust".to_vec()),
+            PatchOp::Copy { offset: 10, len: 2 },
+        ],
+    };
+
+    assert_eq!(
+        patch.stats(),
+        PatchStats {
+            op_count: 3,
+            copy_op_count: 2,
+            insert_op_count: 1,
+            copied_bytes: 6,
+            inserted_bytes: 4,
+        }
+    );
+}
+
+#[test]
 fn diff_bytes_roundtrips_utf8_text() {
     let old = b"const answer = 41;\n";
     let new = b"const answer = 42;\n";
@@ -458,6 +602,31 @@ fn diff_bytes_preserves_unchanged_exception_table_inside_changed_overflowed_info
 }
 
 #[test]
+fn diff_bytes_preserves_unchanged_exception_table_inside_changed_small_info_block() {
+    let old = hermes_small_function_bytes_with_info(
+        &[b"\x01\x02", b"\x11\x12\x13"],
+        &[None, Some(1)],
+        &[None, Some(0xAAAA_AAAA)],
+    );
+    let new = hermes_small_function_bytes_with_info(
+        &[b"\x01\x02\x03\x04", b"\x11\x12\x13"],
+        &[None, Some(1)],
+        &[None, Some(0xBBBB_BBBB)],
+    );
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 160 && offset.saturating_add(*len) >= 176
+        )
+    }));
+}
+
+#[test]
 fn diff_bytes_preserves_common_prefix_and_suffix() {
     let old = b"abcXYZdef";
     let new = b"abc123def";
@@ -492,4 +661,53 @@ fn diff_bytes_preserves_common_prefix_for_append_only_change() {
             ],
         }
     );
+}
+
+#[test]
+fn diff_bytes_preserves_common_middle_anchor_for_text() {
+    let old = b"aaMIDDLEzz";
+    let new = b"xxMIDDLEyy";
+
+    let patch = diff_bytes(old, new);
+
+    assert_eq!(apply_patch(old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len } if *offset <= 2 && offset.saturating_add(*len) >= 8
+        )
+    }));
+}
+
+#[test]
+fn diff_bytes_preserves_common_middle_anchor_within_hermes_function_body() {
+    let old = hermes_small_function_bytes(&[b"\x01\x02\x10\x11\x12\x13\x03\x04"]);
+    let new = hermes_small_function_bytes(&[b"\xAA\xBB\x10\x11\x12\x13\xCC\xDD"]);
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 142 && offset.saturating_add(*len) >= 146
+        )
+    }));
+}
+
+#[test]
+fn diff_bytes_preserves_common_line_anchor_for_text() {
+    let old = b"alpha\nKEEP\nomega\n";
+    let new = b"beta\nKEEP\ngamma\n";
+
+    let patch = diff_bytes(old, new);
+
+    assert_eq!(apply_patch(old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len } if *offset <= 6 && offset.saturating_add(*len) >= 11
+        )
+    }));
 }

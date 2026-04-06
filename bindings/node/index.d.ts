@@ -9,3 +9,13 @@ export type DetectFormatResult =
     };
 
 export function detectFormat(input: Uint8Array): DetectFormatResult;
+
+export type DiffStatsResult = {
+  opCount: number;
+  copyOpCount: number;
+  insertOpCount: number;
+  copiedBytes: number;
+  insertedBytes: number;
+};
+
+export function diffStats(oldInput: Uint8Array, newInput: Uint8Array): DiffStatsResult;

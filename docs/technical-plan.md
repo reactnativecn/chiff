@@ -79,6 +79,7 @@ Bindings should only expose stable library APIs.
 - [src/hermes.rs](/Users/sunny/Documents/workspace/chiff/src/hermes.rs): Hermes structural parsing
 - [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
 - [benches/diff_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/diff_cases.rs): synthetic benchmark harness for diff/apply cases
+- [examples/diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/diff_stats.rs): quick CLI-style inspection for format detection and patch stats
 - [bindings/node/native/src/lib.rs](/Users/sunny/Documents/workspace/chiff/bindings/node/native/src/lib.rs): Node-API binding
 
 ### Public model
@@ -89,6 +90,7 @@ Bindings should only expose stable library APIs.
 - Hermes header parsing
 - Hermes section layout parsing
 - Hermes function layout parsing
+- patch statistics via `PatchStats`
 - minimal patch IR:
   - `Copy { offset, len }`
   - `Insert(bytes)`
@@ -139,6 +141,7 @@ All sections are aligned to 4 bytes, matching Hermes upstream behavior.
 `HermesFunctionLayout` currently supports:
 
 - small function headers, where the function body offset and bytecode size are stored directly in the `SmallFuncHeader`
+- small function info blocks, where `SmallFuncHeader.infoOffset` points directly at optional exception/debug payloads
 - overflowed function headers, where the `SmallFuncHeader` stores the offset to a large `FunctionHeader`
 - overflowed function info blocks, including large headers, optional exception tables, and optional debug-offset payloads
 
@@ -170,10 +173,11 @@ The parser also computes the start and end of the entire bytecode region.
 Non-Hermes inputs currently use a conservative byte diff:
 
 - preserve common prefix
+- try to re-synchronize on a stable middle anchor
 - replace changed middle
 - preserve common suffix
 
-This is deliberately simple but correct.
+This is still deliberately simple, but it can now preserve a stable interior block when both ends change.
 
 ### Hermes path
 
@@ -196,6 +200,7 @@ Hermes diff currently uses a cascading strategy:
 5. Diff debug info and trailing bytes separately.
 
 This already yields a meaningful improvement over monolithic byte diff because unchanged sections and unchanged functions can remain `Copy` even when earlier regions shift.
+The same middle-anchor resync is also used inside each diffed region, so large unchanged byte runs inside a changed function body can survive as `Copy`.
 
 ## What Is Implemented Today
 
@@ -205,6 +210,7 @@ The following milestones are complete:
 - Hermes header parsing
 - Hermes structured section layout parsing
 - small-header function layout parsing
+- small-header function info block parsing
 - overflowed large-header function layout parsing
 - overflowed function info block parsing
 - exception-table and debug-offset subrange parsing inside overflowed info blocks
@@ -212,6 +218,7 @@ The following milestones are complete:
 - function-aware Hermes diff for both small and overflowed headers
 - per-info-block Hermes diff for overflowed function metadata
 - per-subregion Hermes diff for overflowed info metadata, so unchanged exception tables can survive changed large-header/debug payloads
+- middle-anchor resync inside diff regions, so unchanged interior byte runs can survive changed prefixes and suffixes
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Rust crate verification
 - Node and Bun smoke-test verification through one Node-API addon
@@ -249,11 +256,11 @@ It does not yet understand:
 ### 3. Text diff is still conservative
 
 UTF-8 text currently uses the same prefix/suffix byte strategy.
-It does not yet perform:
+It now performs a conservative middle-anchor resync, but it still does not perform:
 
 - line anchors
 - token-aware matching
-- chunk re-synchronization
+- multi-anchor / token-level re-synchronization
 
 ### 4. Benchmarking is still synthetic
 

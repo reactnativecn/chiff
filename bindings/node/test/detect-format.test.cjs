@@ -21,3 +21,15 @@ assert.deepEqual(hermesResult, {
   version: 99,
   form: 'execution',
 });
+
+const diffStatsResult = chiff.diffStats(
+  Buffer.from('abcXYZdef'),
+  Buffer.from('abc123def'),
+);
+assert.deepEqual(diffStatsResult, {
+  opCount: 3,
+  copyOpCount: 2,
+  insertOpCount: 1,
+  copiedBytes: 6,
+  insertedBytes: 3,
+});

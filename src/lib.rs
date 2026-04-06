@@ -10,4 +10,4 @@ pub use hermes::{
     HermesFunction, HermesFunctionInfoBlock, HermesFunctionLayout, HermesHeader, HermesSection,
     HermesSectionKind, HermesSectionLayout,
 };
-pub use patch::{apply_patch, diff_bytes, Patch, PatchError, PatchOp};
+pub use patch::{apply_patch, diff_bytes, Patch, PatchError, PatchOp, PatchStats};
