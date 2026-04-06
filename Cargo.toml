@@ -1,0 +1,14 @@
+[package]
+name = "chiff"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["bindings/node/native"]
+resolver = "2"
+
+[lib]
+name = "chiff"
+path = "src/lib.rs"
+
+[dependencies]

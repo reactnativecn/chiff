@@ -1,0 +1,19 @@
+{
+  "name": "@chiff/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "./index.cjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./index.cjs",
+      "types": "./index.d.ts"
+    }
+  },
+  "scripts": {
+    "build:debug": "cargo build -p chiff-node && node ./scripts/prepare-addon.cjs debug",
+    "test:node": "npm run build:debug && node ./test/detect-format.test.cjs",
+    "test:bun": "npm run build:debug && bun ./test/detect-format.test.cjs"
+  }
+}
