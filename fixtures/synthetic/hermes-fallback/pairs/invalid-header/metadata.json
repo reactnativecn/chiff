@@ -1,0 +1,38 @@
+{
+  "pair": "invalid-header",
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 99,
+        "form": "execution"
+      },
+      "size_bytes": 64,
+      "sha256": "0dac9371a5fc3971cbdfcbc1b02a723f67277339657abb206fa0dfa7ab7904b5"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 99,
+        "form": "execution"
+      },
+      "size_bytes": 64,
+      "sha256": "f9e3a8d02284949bf49aacfb462d112d2919db5a3fc0bcc89466445bd641361f"
+    }
+  ],
+  "current_analysis": {
+    "selected_engine": "generic_binary",
+    "selected_engine_reason": "hermes_old_invalid_header",
+    "old_structured_hermes_support": "invalid_header",
+    "new_structured_hermes_support": "invalid_header",
+    "op_count": 3,
+    "copy_op_count": 2,
+    "insert_op_count": 1,
+    "copied_bytes": 56,
+    "inserted_bytes": 8
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "corpus": "mixed-baseline",
+  "paths": {
+    "old_root": "old",
+    "new_root": "new"
+  },
+  "expected_totals": {
+    "paired": 7,
+    "copy_ops": 18,
+    "insert_ops": 17,
+    "copied_bytes": 4791603,
+    "inserted_bytes": 113
+  },
+  "expected_reason_counts": {
+    "binary_pair": 1,
+    "hermes_form_mismatch": 1,
+    "hermes_structured": 1,
+    "hermes_version_mismatch": 1,
+    "text_pair": 1,
+    "hermes_old_unsupported_version": 1,
+    "hermes_old_invalid_header": 1
+  },
+  "expected_old_support_counts": {
+    "supported": 3,
+    "not_hermes": 2,
+    "unsupported_version": 1,
+    "invalid_header": 1
+  },
+  "expected_new_support_counts": {
+    "supported": 3,
+    "not_hermes": 2,
+    "unsupported_version": 1,
+    "invalid_header": 1
+  }
+}

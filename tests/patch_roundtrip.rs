@@ -1,4 +1,7 @@
-use chiff::{apply_patch, diff_bytes, Patch, PatchError, PatchOp, PatchStats};
+use chiff::{
+    analyze_diff, apply_patch, diff_bytes, EngineKind, EngineReason, HermesForm, Patch, PatchError,
+    PatchOp, PatchStats, StructuredHermesSupport,
+};
 
 const HERMES_MAGIC: u64 = 0x1F19_03C1_03BC_1FC6;
 
@@ -634,6 +637,63 @@ fn diff_bytes_roundtrips_unsupported_same_version_hermes_via_generic_fallback() 
     let patch = diff_bytes(&old, &new);
 
     assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+}
+
+#[test]
+fn analyze_diff_reports_structured_hermes_metadata() {
+    let old = hermes_sectioned_bytes(
+        99,
+        1,
+        1,
+        &[0x10, 0x11, 0x12, 0x13],
+        &[0x30, 0x31, 0x32, 0x33],
+        &[0x50, 0x51, 0x52, 0x53],
+    );
+    let new = hermes_sectioned_bytes(
+        99,
+        1,
+        1,
+        &[0x10, 0x11, 0x12, 0x13],
+        &[0x30, 0x31, 0x32, 0x33],
+        &[0x50, 0x51, 0x52, 0x54],
+    );
+
+    let analysis = analyze_diff(&old, &new);
+
+    assert_eq!(analysis.engine_decision.kind, EngineKind::Hermes);
+    assert_eq!(
+        analysis.engine_decision.reason,
+        EngineReason::HermesStructured
+    );
+    assert_eq!(
+        analysis.old_structured_hermes_support,
+        StructuredHermesSupport::Supported {
+            version: 99,
+            form: HermesForm::Execution,
+        }
+    );
+    assert_eq!(analysis.stats, analysis.patch.stats());
+    assert_eq!(apply_patch(&old, &analysis.patch).unwrap(), new);
+}
+
+#[test]
+fn analyze_diff_reports_generic_fallback_for_invalid_hermes_header() {
+    let old = hermes_bytes(99, 0x11);
+    let mut new = hermes_bytes(99, 0x11);
+    new[24] = 0x44;
+
+    let analysis = analyze_diff(&old, &new);
+
+    assert_eq!(analysis.engine_decision.kind, EngineKind::GenericBinary);
+    assert_eq!(
+        analysis.engine_decision.reason,
+        EngineReason::HermesOldInvalidHeader
+    );
+    assert_eq!(
+        analysis.old_structured_hermes_support,
+        StructuredHermesSupport::InvalidHeader
+    );
+    assert_eq!(apply_patch(&old, &analysis.patch).unwrap(), new);
 }
 
 #[test]

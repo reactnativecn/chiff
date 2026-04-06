@@ -1,8 +1,12 @@
+pub mod corpus;
 pub mod engine;
 pub mod format;
 pub mod hermes;
 pub mod patch;
 
+pub use corpus::{
+    analyze_directory_pair, CorpusAnalysis, CorpusEntryAnalysis, CorpusEntryStatus, CorpusSummary,
+};
 pub use engine::{select_engine, select_engine_decision, EngineDecision, EngineKind, EngineReason};
 pub use format::{detect_input_format, HermesForm, InputFormat};
 pub use hermes::{
@@ -13,4 +17,6 @@ pub use hermes::{
     HermesHeader, HermesSection, HermesSectionKind, HermesSectionLayout, StructuredHermesSupport,
     SUPPORTED_STRUCTURED_HERMES_VERSIONS,
 };
-pub use patch::{apply_patch, diff_bytes, Patch, PatchError, PatchOp, PatchStats};
+pub use patch::{
+    analyze_diff, apply_patch, diff_bytes, DiffAnalysis, Patch, PatchError, PatchOp, PatchStats,
+};

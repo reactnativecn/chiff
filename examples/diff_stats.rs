@@ -1,4 +1,4 @@
-use chiff::{assess_structured_hermes, detect_input_format, diff_bytes, select_engine_decision};
+use chiff::{analyze_diff, detect_input_format};
 use std::{env, fs, process};
 
 fn main() {
@@ -22,27 +22,28 @@ fn main() {
         process::exit(1);
     });
 
-    let patch = diff_bytes(&old, &new);
-    let stats = patch.stats();
+    let analysis = analyze_diff(&old, &new);
 
     println!("old_format={:?}", detect_input_format(&old));
     println!("new_format={:?}", detect_input_format(&new));
-    let decision = select_engine_decision(&old, &new);
-    println!("selected_engine={}", decision.kind.as_str());
-    println!("selected_engine_reason={}", decision.reason.as_str());
+    println!("selected_engine={}", analysis.engine_decision.kind.as_str());
+    println!(
+        "selected_engine_reason={}",
+        analysis.engine_decision.reason.as_str()
+    );
     println!(
         "old_structured_hermes_support={}",
-        assess_structured_hermes(&old).as_str()
+        analysis.old_structured_hermes_support.as_str()
     );
     println!(
         "new_structured_hermes_support={}",
-        assess_structured_hermes(&new).as_str()
+        analysis.new_structured_hermes_support.as_str()
     );
-    println!("op_count={}", stats.op_count);
-    println!("copy_op_count={}", stats.copy_op_count);
-    println!("insert_op_count={}", stats.insert_op_count);
-    println!("copied_bytes={}", stats.copied_bytes);
-    println!("inserted_bytes={}", stats.inserted_bytes);
+    println!("op_count={}", analysis.stats.op_count);
+    println!("copy_op_count={}", analysis.stats.copy_op_count);
+    println!("insert_op_count={}", analysis.stats.insert_op_count);
+    println!("copied_bytes={}", analysis.stats.copied_bytes);
+    println!("inserted_bytes={}", analysis.stats.inserted_bytes);
 }
 
 fn print_usage_and_exit() -> ! {

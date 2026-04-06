@@ -19,3 +19,7 @@ criterion = "0.5"
 [[bench]]
 name = "diff_cases"
 harness = false
+
+[[bench]]
+name = "corpus_cases"
+harness = false

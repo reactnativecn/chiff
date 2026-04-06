@@ -12,6 +12,7 @@ The goal is to build a format-aware diff engine that:
 
 - preserves semantic structure when possible
 - falls back safely to generic byte diff when structure cannot be trusted
+- distinguishes explicit generic-binary cases from true mixed-format cases
 - remains easy to bind into Node and Bun through one shared native addon
 
 Today that also means the Hermes-aware path is intentionally conservative:
@@ -83,15 +84,17 @@ Bindings should only expose stable library APIs.
 ### Crate layout
 
 - [src/format.rs](/Users/sunny/Documents/workspace/chiff/src/format.rs): input detection
+- [src/corpus.rs](/Users/sunny/Documents/workspace/chiff/src/corpus.rs): reusable directory-pair corpus analysis and summary aggregation
 - [src/engine.rs](/Users/sunny/Documents/workspace/chiff/src/engine.rs): engine selection
 - [src/hermes.rs](/Users/sunny/Documents/workspace/chiff/src/hermes.rs): Hermes structural parsing
 - [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
 - [benches/diff_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/diff_cases.rs): synthetic benchmark harness for diff/apply cases
+- [benches/corpus_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/corpus_cases.rs): Criterion harness for real mixed-corpus diff/apply cases
 - [examples/diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/diff_stats.rs): quick CLI-style inspection for format detection and patch stats
 - [examples/corpus_diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/corpus_diff_stats.rs): directory-pair runner for real corpus diff stats
 - [examples/hermes_region_report.rs](/Users/sunny/Documents/workspace/chiff/examples/hermes_region_report.rs): Hermes-specific region diagnostics for section, gap, function, and info-block churn
 - [bindings/node/native/src/lib.rs](/Users/sunny/Documents/workspace/chiff/bindings/node/native/src/lib.rs): Node-API binding
-- [bindings/node/scripts/corpus-diff-stats.cjs](/Users/sunny/Documents/workspace/chiff/bindings/node/scripts/corpus-diff-stats.cjs): Node/Bun directory-pair runner built on `detectFormat` and `diffStats`
+- [bindings/node/scripts/corpus-diff-stats.cjs](/Users/sunny/Documents/workspace/chiff/bindings/node/scripts/corpus-diff-stats.cjs): Node/Bun directory-pair runner built on the Rust `analyze_directory_pair` binding
 - [fixtures/generated/testHotUpdate/android/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/README.md): real generated Android bundle fixtures copied from the `react-native-update` example app
 - [fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md): real old/new Android fixture pair produced from a minimal UI-string change
 
@@ -101,6 +104,9 @@ Bindings should only expose stable library APIs.
 
 - input format detection
 - engine selection
+- unified diff analysis via `analyze_diff`
+- directory-pair corpus analysis via `analyze_directory_pair`
+- Node/Bun directory-pair corpus analysis via `analyzeDirectoryPairResult`
 - structured Hermes compatibility helpers:
   - `assess_structured_hermes`
   - `supports_structured_hermes_version`
@@ -127,6 +133,9 @@ The corpus currently contains:
 - a release-mode text bundle at [fixtures/generated/testHotUpdate/android/text/index.android.bundle](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/text/index.android.bundle)
 - a Hermes bytecode bundle at [fixtures/generated/testHotUpdate/android/hermes/index.android.hbc](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/hermes/index.android.hbc)
 - a real old/new pair at [fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/pairs/minor-string-edit/README.md)
+- synthetic fallback pairs at [fixtures/synthetic/hermes-fallback/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/synthetic/hermes-fallback/README.md)
+- synthetic arbitrary binary fixtures at [fixtures/synthetic/generic-binary/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/synthetic/generic-binary/README.md)
+- a mixed regression corpus at [fixtures/corpus/mixed-baseline/README.md](/Users/sunny/Documents/workspace/chiff/fixtures/corpus/mixed-baseline/README.md)
 
 This corpus is not yet a versioned old/new diff benchmark set.
 It is currently used for:
@@ -141,6 +150,9 @@ The first real mutation pair currently shows:
 - Hermes function layout on real bundles required support for non-monotonic and duplicate overflowed bytecode offsets
 - Hermes `debug_info` can now be parsed into header, filename table, filename storage, file-region table, and per-function debug-data streams
 - the first real Hermes mutation pair now diffs down to a small patch because `debug_data` is preserved as `Copy`
+- synthetic fallback pairs now lock down the generic-binary path for unsupported Hermes versions and invalid Hermes headers
+- synthetic fixtures now also lock down Hermes version mismatch, Hermes form mismatch, and arbitrary binary fallback
+- the mixed corpus now locks down aggregate reason/support counts across structured Hermes, text, arbitrary binary, unsupported-version fallback, invalid-header fallback, version mismatch, and form mismatch in one run
 
 ## Current Hermes Model
 
@@ -259,6 +271,7 @@ Engine selection is now deliberately stricter than format detection:
 - both must use the same bytecode form
 - the version must be in `SUPPORTED_STRUCTURED_HERMES_VERSIONS`
 - if later structural parsing still fails, `diff_bytes` falls back to generic binary diff before emitting the patch
+- two arbitrary binary inputs now report `binary_pair` rather than the more ambiguous `mixed_formats`
 
 This means Hermes version churn or partial format breakage should reduce patch quality, but should not compromise patch correctness.
 
@@ -283,9 +296,12 @@ The following milestones are complete:
 - parsing of global Hermes `debug_info` layout and function debug-data streams using the upstream serialized format
 - debug-info-aware diff that preserves unchanged filename tables, file regions, and per-function debug-data streams
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
+- Criterion mixed-corpus benchmark harness covering real text/Hermes pairs plus generic-binary and Hermes fallback pairs
 - Rust crate verification
+- reusable Rust corpus aggregation API for fixtures, reports, and future benchmark tooling
 - Node and Bun smoke-test verification through one Node-API addon
 - real generated text/Hermes Android fixtures and one real old/new mutation pair from the `react-native-update` example app
+- synthetic fixture coverage for version mismatch, form mismatch, invalid header, unsupported version, and arbitrary binary fallback cases
 
 ## Current Limits
 
@@ -337,10 +353,14 @@ It now performs a conservative middle-anchor resync, but it still does not perfo
 - token-aware matching
 - multi-anchor / token-level re-synchronization
 
-### 4. Benchmarking is still synthetic
+### 4. Benchmarking is still limited
 
-We now have a local Criterion harness for representative text and Hermes cases.
-However, we do not yet have a corpus-driven benchmark suite that records:
+We now have both:
+
+- a synthetic Criterion harness for focused text/Hermes micro-cases
+- a mixed-corpus Criterion harness over real and synthetic regression fixtures
+
+However, we still do not have a broader corpus-driven benchmark suite that records:
 
 - patch size
 - generation time
@@ -462,6 +482,8 @@ Bindings should stay compatibility-oriented:
 - no duplicated parsing logic
 - no JS-side structural interpretation
 
+That now includes corpus analysis as well: the Node/Bun runner delegates directory walking, pairing, and summary aggregation to Rust rather than re-implementing those rules in JavaScript.
+
 If new APIs are exposed to Node/Bun, they should come from crate-level stable functions, not binding-only helpers.
 
 ## Immediate Next Tasks
@@ -471,6 +493,7 @@ The immediate next implementation step after this document is:
 1. Decide whether to split Hermes function bodies into finer structural subregions before opcode parsing.
 2. Add a benchmark harness so new structure-aware changes can be evaluated against patch size and runtime, not just correctness.
 3. Use those measurements to choose between opcode-aware Hermes refinement and text-diff refinement as the next branch.
+4. Use the mixed-corpus Criterion baseline before and after any Hermes/text optimization so patch-size收益和运行时回归都能在真实 fixture 上被观察到。
 
 After that, the most valuable branch point is:
 

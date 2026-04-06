@@ -1,0 +1,34 @@
+{
+  "pair": "arbitrary-binary",
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/binary/blob.bin",
+      "format": {
+        "kind": "binary"
+      },
+      "size_bytes": 10,
+      "sha256": "b1150cb0abaca65e528000ccc8a2c73cfd63fb8153b8491fb0c6f6773b286817"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/binary/blob.bin",
+      "format": {
+        "kind": "binary"
+      },
+      "size_bytes": 10,
+      "sha256": "580ef677c43c080ed6fd289ebba29b2ba86d8c602f46ad6674f36075bf3dbf8c"
+    }
+  ],
+  "current_analysis": {
+    "selected_engine": "generic_binary",
+    "selected_engine_reason": "binary_pair",
+    "old_structured_hermes_support": "not_hermes",
+    "new_structured_hermes_support": "not_hermes",
+    "op_count": 2,
+    "copy_op_count": 1,
+    "insert_op_count": 1,
+    "copied_bytes": 2,
+    "inserted_bytes": 8
+  }
+}

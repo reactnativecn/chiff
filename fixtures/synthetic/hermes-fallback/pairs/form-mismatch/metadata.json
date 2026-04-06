@@ -1,0 +1,38 @@
+{
+  "pair": "form-mismatch",
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 99,
+        "form": "execution"
+      },
+      "size_bytes": 142,
+      "sha256": "ce4e8b2dc7553fb77ccdee949bfa06ff423db05ec31081c9263c878e6a2dd3a1"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 99,
+        "form": "delta"
+      },
+      "size_bytes": 142,
+      "sha256": "45df4c8d89d0cf537073b7fb54bc8099c4ec6435a6493316840d19591b0b4cae"
+    }
+  ],
+  "current_analysis": {
+    "selected_engine": "generic_binary",
+    "selected_engine_reason": "hermes_form_mismatch",
+    "old_structured_hermes_support": "supported",
+    "new_structured_hermes_support": "supported",
+    "op_count": 5,
+    "copy_op_count": 2,
+    "insert_op_count": 3,
+    "copied_bytes": 125,
+    "inserted_bytes": 17
+  }
+}

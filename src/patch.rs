@@ -1,7 +1,8 @@
 use crate::{
-    can_use_structured_hermes, detect_input_format, parse_artifact, select_engine, EngineKind,
-    HermesDebugDataStream, HermesDebugInfoLayout, HermesFunctionInfoBlock, HermesSection,
-    HermesSectionKind, InputFormat,
+    assess_structured_hermes, can_use_structured_hermes, detect_input_format, parse_artifact,
+    select_engine_decision, EngineDecision, EngineKind, HermesDebugDataStream,
+    HermesDebugInfoLayout, HermesFunctionInfoBlock, HermesSection, HermesSectionKind, InputFormat,
+    StructuredHermesSupport,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -51,6 +52,15 @@ pub struct PatchStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffAnalysis {
+    pub patch: Patch,
+    pub stats: PatchStats,
+    pub engine_decision: EngineDecision,
+    pub old_structured_hermes_support: StructuredHermesSupport,
+    pub new_structured_hermes_support: StructuredHermesSupport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchError {
     InvalidCopyRange {
         offset: usize,
@@ -83,11 +93,28 @@ pub fn apply_patch(old: &[u8], patch: &Patch) -> Result<Vec<u8>, PatchError> {
 }
 
 pub fn diff_bytes(old: &[u8], new: &[u8]) -> Patch {
-    match select_engine(old, new) {
+    analyze_diff(old, new).patch
+}
+
+pub fn analyze_diff(old: &[u8], new: &[u8]) -> DiffAnalysis {
+    let engine_decision = select_engine_decision(old, new);
+    let old_structured_hermes_support = assess_structured_hermes(old);
+    let new_structured_hermes_support = assess_structured_hermes(new);
+
+    let patch = match engine_decision.kind {
         EngineKind::Hermes => {
             diff_hermes_bytes(old, new).unwrap_or_else(|| diff_generic_bytes(old, new))
         }
         EngineKind::Text | EngineKind::GenericBinary => diff_generic_bytes(old, new),
+    };
+    let stats = patch.stats();
+
+    DiffAnalysis {
+        patch,
+        stats,
+        engine_decision,
+        old_structured_hermes_support,
+        new_structured_hermes_support,
     }
 }
 

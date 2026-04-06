@@ -20,6 +20,7 @@ impl EngineKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineReason {
+    BinaryPair,
     TextPair,
     HermesStructured,
     HermesVersionMismatch,
@@ -34,6 +35,7 @@ pub enum EngineReason {
 impl EngineReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::BinaryPair => "binary_pair",
             Self::TextPair => "text_pair",
             Self::HermesStructured => "hermes_structured",
             Self::HermesVersionMismatch => "hermes_version_mismatch",
@@ -59,6 +61,10 @@ pub fn select_engine(old: &[u8], new: &[u8]) -> EngineKind {
 
 pub fn select_engine_decision(old: &[u8], new: &[u8]) -> EngineDecision {
     match (detect_input_format(old), detect_input_format(new)) {
+        (InputFormat::Binary, InputFormat::Binary) => EngineDecision {
+            kind: EngineKind::GenericBinary,
+            reason: EngineReason::BinaryPair,
+        },
         (InputFormat::TextUtf8, InputFormat::TextUtf8) => EngineDecision {
             kind: EngineKind::Text,
             reason: EngineReason::TextPair,

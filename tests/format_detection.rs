@@ -626,6 +626,18 @@ fn detects_hermes_delta_bytecode() {
 }
 
 #[test]
+fn selects_generic_binary_engine_for_two_binary_inputs() {
+    let old = [0_u8, 0xFF, 0x10, 0x00, 0x7F];
+    let new = [0_u8, 0xFF, 0x20, 0x00, 0x7F];
+
+    assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
+    assert_eq!(
+        select_engine_decision(&old, &new).reason,
+        EngineReason::BinaryPair
+    );
+}
+
+#[test]
 fn selects_text_engine_for_two_text_inputs() {
     let old = b"const a = 1;\n";
     let new = b"const a = 2;\n";
