@@ -118,15 +118,87 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
         append_region_diff(&mut ops, old, new, old_range, new_range);
     }
 
-    append_region_diff(
-        &mut ops,
-        old,
-        new,
-        old_artifact.section_layout.structured_end_offset as usize
-            ..old_artifact.header.debug_info_offset as usize,
-        new_artifact.section_layout.structured_end_offset as usize
-            ..new_artifact.header.debug_info_offset as usize,
-    );
+    if let (Some(old_functions), Some(new_functions)) = (
+        old_artifact.function_layout.as_ref(),
+        new_artifact.function_layout.as_ref(),
+    ) {
+        append_region_diff(
+            &mut ops,
+            old,
+            new,
+            old_artifact.section_layout.structured_end_offset as usize
+                ..old_functions.bytecode_region_start as usize,
+            new_artifact.section_layout.structured_end_offset as usize
+                ..new_functions.bytecode_region_start as usize,
+        );
+
+        let function_count = old_functions
+            .functions
+            .len()
+            .max(new_functions.functions.len());
+
+        for function_index in 0..function_count {
+            let old_range = old_functions
+                .functions
+                .get(function_index)
+                .map(|function| {
+                    function.bytecode_offset as usize..function.body_end_offset as usize
+                })
+                .unwrap_or(0..0);
+            let new_range = new_functions
+                .functions
+                .get(function_index)
+                .map(|function| {
+                    function.bytecode_offset as usize..function.body_end_offset as usize
+                })
+                .unwrap_or(0..0);
+
+            append_region_diff(&mut ops, old, new, old_range, new_range);
+        }
+
+        if old_functions.info_blocks.is_empty() && new_functions.info_blocks.is_empty() {
+            append_region_diff(
+                &mut ops,
+                old,
+                new,
+                old_functions.bytecode_region_end as usize
+                    ..old_artifact.header.debug_info_offset as usize,
+                new_functions.bytecode_region_end as usize
+                    ..new_artifact.header.debug_info_offset as usize,
+            );
+        } else {
+            let info_block_count = old_functions
+                .info_blocks
+                .len()
+                .max(new_functions.info_blocks.len());
+
+            for info_block_index in 0..info_block_count {
+                let old_range = old_functions
+                    .info_blocks
+                    .get(info_block_index)
+                    .map(|block| block.offset as usize..block.end_offset as usize)
+                    .unwrap_or(0..0);
+                let new_range = new_functions
+                    .info_blocks
+                    .get(info_block_index)
+                    .map(|block| block.offset as usize..block.end_offset as usize)
+                    .unwrap_or(0..0);
+
+                append_region_diff(&mut ops, old, new, old_range, new_range);
+            }
+        }
+    } else {
+        append_region_diff(
+            &mut ops,
+            old,
+            new,
+            old_artifact.section_layout.structured_end_offset as usize
+                ..old_artifact.header.debug_info_offset as usize,
+            new_artifact.section_layout.structured_end_offset as usize
+                ..new_artifact.header.debug_info_offset as usize,
+        );
+    }
+
     append_region_diff(
         &mut ops,
         old,

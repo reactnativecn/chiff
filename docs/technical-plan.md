@@ -1,0 +1,379 @@
+# Chiff Technical Plan
+
+## Goal
+
+`chiff` is a Rust diff library aimed at two primary input classes:
+
+- Hermes bytecode bundles (`.hbc`)
+- UTF-8 text bundles, especially JavaScript bundle artifacts
+
+The project goal is not to invent a single universal binary diff algorithm and force every format through it.
+The goal is to build a format-aware diff engine that:
+
+- preserves semantic structure when possible
+- falls back safely to generic byte diff when structure cannot be trusted
+- remains easy to bind into Node and Bun through one shared native addon
+
+The current surrounding ecosystem baseline is documented in [baselines.md](/Users/sunny/Documents/workspace/chiff/docs/baselines.md).
+
+## Non-goals
+
+The current phase explicitly does not try to do the following:
+
+- invent a brand-new patch container format
+- replace every mature binary diff implementation in all workloads
+- support speculative footer metadata that is not actually present in current bundles
+- fully reconstruct Hermes VM-level semantics from bytecode instructions
+
+## Design Principles
+
+### 1. Structure first, bytes second
+
+For Hermes inputs, raw byte diff is a fallback, not the primary model.
+The engine should first identify stable regions:
+
+- file header
+- structured metadata sections
+- function bodies
+- function info blocks
+- debug info
+
+Only after those regions are identified should byte-level diffing run inside each region.
+
+### 2. Safe degradation
+
+Whenever structural parsing is incomplete or uncertain, `chiff` must degrade to a coarser strategy:
+
+- function-aware
+- section-aware
+- generic prefix/suffix byte diff
+
+This keeps correctness separate from optimization.
+
+### 3. TDD over speculative optimization
+
+Each new parsing or diff refinement stage should be introduced by tests that demonstrate a concrete preservation property, for example:
+
+- unchanged Hermes sections survive offset shifts
+- unchanged functions survive preceding function growth
+- overflowed function headers are still resolved to the correct function body ranges
+
+### 4. Thin bindings
+
+Node and Bun integration should stay thin.
+The Rust crate owns:
+
+- format detection
+- Hermes parsing
+- diff generation
+- patch application
+
+Bindings should only expose stable library APIs.
+
+## Current Architecture
+
+### Crate layout
+
+- [src/format.rs](/Users/sunny/Documents/workspace/chiff/src/format.rs): input detection
+- [src/engine.rs](/Users/sunny/Documents/workspace/chiff/src/engine.rs): engine selection
+- [src/hermes.rs](/Users/sunny/Documents/workspace/chiff/src/hermes.rs): Hermes structural parsing
+- [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
+- [bindings/node/native/src/lib.rs](/Users/sunny/Documents/workspace/chiff/bindings/node/native/src/lib.rs): Node-API binding
+
+### Public model
+
+`chiff` currently exposes:
+
+- input format detection
+- Hermes header parsing
+- Hermes section layout parsing
+- Hermes function layout parsing
+- minimal patch IR:
+  - `Copy { offset, len }`
+  - `Insert(bytes)`
+
+This IR is intentionally small for the current phase.
+It is enough to validate structural diff behavior before introducing more advanced operations.
+
+## Current Hermes Model
+
+### Header parsing
+
+`HermesHeader` tracks the important fields from `BytecodeFileHeader`, including:
+
+- version and bytecode form
+- function count
+- string-related counts and sizes
+- bigint / regexp sizes
+- CommonJS and function source counts
+- `debug_info_offset`
+- bytecode options flags
+
+This gives the diff engine enough global metadata to parse and validate the file layout.
+
+### Section layout
+
+`HermesSectionLayout` currently follows the upstream structured segment order:
+
+1. function headers
+2. string kinds
+3. identifier hashes
+4. small string table
+5. overflow string table
+6. string storage
+7. literal value buffer
+8. object key buffer
+9. object shape table
+10. bigint table
+11. bigint storage
+12. regexp table
+13. regexp storage
+14. CommonJS module table
+15. function source table
+
+All sections are aligned to 4 bytes, matching Hermes upstream behavior.
+
+### Function layout
+
+`HermesFunctionLayout` currently supports:
+
+- small function headers, where the function body offset and bytecode size are stored directly in the `SmallFuncHeader`
+- overflowed function headers, where the `SmallFuncHeader` stores the offset to a large `FunctionHeader`
+- overflowed function info blocks, including large headers and optional debug-offset payloads
+
+For each function, `chiff` currently derives:
+
+- function index
+- function header offset
+- function body start
+- bytecode size
+- function body end
+
+For overflowed functions, `chiff` also derives per-function info blocks:
+
+- info block start
+- parsed payload end
+- padded block end
+- whether exception handlers are present
+- whether debug offsets are present
+
+The parser also computes the start and end of the entire bytecode region.
+
+## Current Diff Strategy
+
+### Generic path
+
+Non-Hermes inputs currently use a conservative byte diff:
+
+- preserve common prefix
+- replace changed middle
+- preserve common suffix
+
+This is deliberately simple but correct.
+
+### Hermes path
+
+Hermes diff currently uses a cascading strategy:
+
+1. Diff the fixed 128-byte file header.
+2. Diff each structured section separately.
+3. If function layout is available:
+   - diff pre-bytecode gap
+   - diff each function body separately
+   - diff each overflowed function info block separately when available
+   - otherwise diff post-bytecode pre-debug gap
+4. Otherwise:
+   - diff the whole non-debug tail as one region
+5. Diff debug info and trailing bytes separately.
+
+This already yields a meaningful improvement over monolithic byte diff because unchanged sections and unchanged functions can remain `Copy` even when earlier regions shift.
+
+## What Is Implemented Today
+
+The following milestones are complete:
+
+- Hermes execution and delta magic detection
+- Hermes header parsing
+- Hermes structured section layout parsing
+- small-header function layout parsing
+- overflowed large-header function layout parsing
+- overflowed function info block parsing
+- section-aware Hermes diff
+- function-aware Hermes diff for both small and overflowed headers
+- per-info-block Hermes diff for overflowed function metadata
+- Rust crate verification
+- Node and Bun smoke-test verification through one Node-API addon
+
+## Current Limits
+
+The following areas are still intentionally incomplete:
+
+### 1. Function info substructure is still coarse
+
+For overflowed functions, the parser now exposes per-function info block ranges.
+However, it still does not break those blocks into first-class subregions such as:
+
+- exception table ranges
+- exception entry arrays
+- debug-offset subranges as distinct compare units
+
+This means unchanged info blocks can now survive neighboring changes, but unchanged exception/debug subparts inside a changed block are not yet isolated.
+
+### 2. Opcode-aware diff is not implemented
+
+Within a function body, `chiff` still uses byte-level prefix/suffix diff.
+It does not yet understand:
+
+- instruction boundaries
+- jump tables
+- operand classes
+- Hermes delta-relative operand normalization
+
+### 3. Text diff is still conservative
+
+UTF-8 text currently uses the same prefix/suffix byte strategy.
+It does not yet perform:
+
+- line anchors
+- token-aware matching
+- chunk re-synchronization
+
+### 4. No benchmark harness yet
+
+We have external baselines, but not yet an internal benchmark suite that records:
+
+- patch size
+- generation time
+- apply time
+- memory trends
+
+## Near-term Roadmap
+
+### Stage 1: Function info layout
+
+Completed:
+
+- parse overflowed function info blocks as explicit regions
+- teach Hermes diff to compare those info blocks per function instead of as one shared metadata tail
+
+Why:
+
+- Hermes metadata churn often sits in function info and debug-related regions
+- per-function segmentation should preserve more unchanged metadata after earlier function shifts
+
+### Stage 2: Function info subregions
+
+Next priority:
+
+- parse exception table subranges inside function info blocks
+- parse debug-offset subranges explicitly
+- allow per-function info diff to preserve unchanged subregions within a changed info block
+
+Why:
+
+- Hermes metadata churn often lands inside function info rather than across the whole block
+- subregion segmentation should preserve more unchanged metadata when only part of an info block changes
+
+### Stage 3: Function body substructure
+
+After function info layout:
+
+- identify bytecode body vs jump table tail
+- preserve aligned jump-table regions separately when possible
+
+Why:
+
+- function bodies often shift due to codegen changes, but jump tables may remain stable
+
+### Stage 4: Opcode-aware normalization
+
+Then:
+
+- parse Hermes instructions
+- identify operand classes that are good candidates for normalization
+- optionally introduce a normalized internal comparison view for selected operands
+
+This stage should be driven by real corpus evidence, not aesthetic preference.
+
+### Stage 5: Text diff refinement
+
+For text bundles:
+
+- add line-anchor matching
+- add token-aware middle-block matching
+- retain generic byte fallback for pathological inputs
+
+### Stage 6: Benchmarks and corpus evaluation
+
+Add:
+
+- fixture corpus management
+- benchmark commands
+- artifact reports comparing `chiff` to HDiffPatch / bsdiff / xdelta3 / zstd patch-from
+
+## Validation Strategy
+
+Every parsing or diff refinement should satisfy three layers of validation:
+
+### Unit tests
+
+Validate:
+
+- field extraction
+- alignment handling
+- section and function offsets
+- invalid layout rejection
+
+### Round-trip tests
+
+Validate:
+
+- `apply_patch(old, diff_bytes(old, new)) == new`
+
+for:
+
+- text
+- generic binary
+- Hermes small-header bundles
+- Hermes overflowed-header bundles
+
+### Behavioral preservation tests
+
+Validate the optimization property, not just correctness:
+
+- unchanged section remains copyable after earlier section growth
+- unchanged function remains copyable after earlier function growth
+- same property holds for overflowed large-header functions
+- unchanged overflowed function info block remains copyable between changed neighboring info blocks
+
+## Compatibility Strategy
+
+### Rust crate
+
+The Rust API is the source of truth.
+New public types should only be added when they represent stable structure that is likely to remain useful for bindings and benchmarks.
+
+### Node / Bun
+
+Bindings should stay compatibility-oriented:
+
+- thin API surface
+- no duplicated parsing logic
+- no JS-side structural interpretation
+
+If new APIs are exposed to Node/Bun, they should come from crate-level stable functions, not binding-only helpers.
+
+## Immediate Next Tasks
+
+The immediate next implementation step after this document is:
+
+1. Split function info blocks into exception-table and debug-offset subregions.
+2. Add regression tests showing preserved copy behavior for unchanged subregions inside changed info blocks.
+3. Decide whether the next high-value step is Hermes opcode structure or benchmark harness work.
+
+After that, the most valuable branch point is:
+
+- opcode-aware Hermes body refinement, or
+- benchmark harness and real corpus measurement
+
+That choice should be driven by evidence from real patch-size measurements, not by intuition alone.
