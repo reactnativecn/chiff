@@ -12,7 +12,7 @@ fn mixed_baseline_corpus_has_expected_reason_and_support_summary() {
     let corpus = analyze_directory_pair(&old_root, &new_root).unwrap();
 
     assert_eq!(corpus.summary.paired, 7);
-    assert_eq!(corpus.summary.copy_ops, 18);
+    assert_eq!(corpus.summary.copy_ops, 4_658);
     assert_eq!(corpus.summary.insert_ops, 17);
     assert_eq!(corpus.summary.copied_bytes, 4_791_603);
     assert_eq!(corpus.summary.inserted_bytes, 113);

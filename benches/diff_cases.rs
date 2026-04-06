@@ -328,6 +328,12 @@ fn bench_diff_hermes_small(c: &mut Criterion) {
     c.bench_function("diff/hermes-small-middle-anchor", |b| {
         b.iter(|| diff_bytes(black_box(&old_anchor), black_box(&new_anchor)))
     });
+
+    let old_instruction = hermes_small_function_bytes(&[&[5, 0x10, 5, 0x20, 5, 0x30]]);
+    let new_instruction = hermes_small_function_bytes(&[&[5, 0x11, 5, 0x20, 5, 0x31]]);
+    c.bench_function("diff/hermes-small-instruction-split", |b| {
+        b.iter(|| diff_bytes(black_box(&old_instruction), black_box(&new_instruction)))
+    });
 }
 
 fn bench_diff_hermes_overflow_info(c: &mut Criterion) {

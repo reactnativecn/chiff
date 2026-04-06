@@ -1,8 +1,12 @@
 use crate::{
-    assess_structured_hermes, can_use_structured_hermes, detect_input_format, parse_artifact,
-    select_engine_decision, EngineDecision, EngineKind, HermesDebugDataStream,
-    HermesDebugInfoLayout, HermesFunctionInfoBlock, HermesSection, HermesSectionKind, InputFormat,
-    StructuredHermesSupport,
+    assess_structured_hermes, can_use_structured_hermes, detect_input_format,
+    hermes_opcodes::{
+        HERMES_V98_V99_OPCODE_SIZES, HERMES_V98_V99_STRING_SWITCH_IMM_OPCODE,
+        HERMES_V98_V99_UINT_SWITCH_IMM_OPCODE,
+    },
+    parse_artifact, select_engine_decision, EngineDecision, EngineKind, HermesDebugDataStream,
+    HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock, HermesSection,
+    HermesSectionKind, InputFormat, StructuredHermesSupport,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -228,6 +232,8 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
         let function_range_count = old_function_ranges.len().max(new_function_ranges.len());
 
         for function_index in 0..function_range_count {
+            let old_function = old_functions.functions.get(function_index);
+            let new_function = new_functions.functions.get(function_index);
             let old_range = old_function_ranges
                 .get(function_index)
                 .cloned()
@@ -236,7 +242,34 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
                 .get(function_index)
                 .cloned()
                 .unwrap_or(0..0);
-            append_region_diff(&mut ops, old, new, old_range, new_range);
+
+            match (
+                old_function.and_then(|function| parse_function_body_layout(old, function)),
+                new_function.and_then(|function| parse_function_body_layout(new, function)),
+            ) {
+                (Some(old_body), Some(new_body)) => {
+                    let structured_ops = build_function_body_diff(old, new, &old_body, &new_body);
+                    let coarse_ops = build_region_diff(old, new, old_range.clone(), new_range.clone());
+                    let structured_stats = Patch {
+                        ops: structured_ops.clone(),
+                    }
+                    .stats();
+                    let coarse_stats = Patch {
+                        ops: coarse_ops.clone(),
+                    }
+                    .stats();
+
+                    if structured_stats.inserted_bytes < coarse_stats.inserted_bytes
+                        || (structured_stats.inserted_bytes == coarse_stats.inserted_bytes
+                            && structured_stats.op_count < coarse_stats.op_count)
+                    {
+                        ops.extend(structured_ops);
+                    } else {
+                        ops.extend(coarse_ops);
+                    }
+                }
+                _ => append_region_diff(&mut ops, old, new, old_range, new_range),
+            }
         }
 
         if old_functions.info_blocks.is_empty() && new_functions.info_blocks.is_empty() {
@@ -343,6 +376,60 @@ fn append_region_diff(
         &new[new_range],
         old_range.start,
     );
+}
+
+fn build_region_diff(
+    old: &[u8],
+    new: &[u8],
+    old_range: std::ops::Range<usize>,
+    new_range: std::ops::Range<usize>,
+) -> Vec<PatchOp> {
+    let mut ops = Vec::new();
+    append_region_diff(&mut ops, old, new, old_range, new_range);
+    ops
+}
+
+fn build_function_body_diff(
+    old: &[u8],
+    new: &[u8],
+    old_body: &HermesFunctionBodyLayout,
+    new_body: &HermesFunctionBodyLayout,
+) -> Vec<PatchOp> {
+    let mut ops = Vec::new();
+    let instruction_count = old_body.instructions.len().max(new_body.instructions.len());
+    for index in 0..instruction_count {
+        append_region_diff(
+            &mut ops,
+            old,
+            new,
+            old_body.instructions.get(index).cloned().unwrap_or(0..0),
+            new_body.instructions.get(index).cloned().unwrap_or(0..0),
+        );
+    }
+
+    let post_opcode_segment_count = old_body
+        .post_opcode_segments
+        .len()
+        .max(new_body.post_opcode_segments.len());
+    for index in 0..post_opcode_segment_count {
+        append_region_diff(
+            &mut ops,
+            old,
+            new,
+            old_body
+                .post_opcode_segments
+                .get(index)
+                .cloned()
+                .unwrap_or(0..0),
+            new_body
+                .post_opcode_segments
+                .get(index)
+                .cloned()
+                .unwrap_or(0..0),
+        );
+    }
+
+    ops
 }
 
 fn append_info_block_diff(
@@ -503,6 +590,12 @@ struct MiddleAnchor {
     len: usize,
 }
 
+#[derive(Debug, Clone)]
+struct HermesFunctionBodyLayout {
+    instructions: Vec<std::ops::Range<usize>>,
+    post_opcode_segments: Vec<std::ops::Range<usize>>,
+}
+
 fn info_block_ranges(block: Option<&HermesFunctionInfoBlock>) -> HermesInfoBlockRanges {
     let Some(block) = block else {
         return HermesInfoBlockRanges {
@@ -550,6 +643,114 @@ fn info_block_ranges(block: Option<&HermesFunctionInfoBlock>) -> HermesInfoBlock
         debug_offsets,
         trailing_padding,
     }
+}
+
+fn parse_function_body_layout(
+    bytes: &[u8],
+    function: &HermesFunction,
+) -> Option<HermesFunctionBodyLayout> {
+    let opcode_start = function.bytecode_offset as usize;
+    let opcode_end = opcode_start.checked_add(function.bytecode_size as usize)?;
+    let body_end = function.body_end_offset as usize;
+    if opcode_end > body_end || body_end > bytes.len() {
+        return None;
+    }
+
+    let mut cursor = opcode_start;
+    let mut instructions = Vec::new();
+    let mut jump_tables = Vec::new();
+
+    while cursor < opcode_end {
+        let opcode = *bytes.get(cursor)?;
+        let size = usize::from(*HERMES_V98_V99_OPCODE_SIZES.get(opcode as usize)?);
+        if size == 0 {
+            return None;
+        }
+        let inst_end = cursor.checked_add(size)?;
+        if inst_end > opcode_end {
+            return None;
+        }
+
+        instructions.push(cursor..inst_end);
+
+        if opcode == HERMES_V98_V99_UINT_SWITCH_IMM_OPCODE {
+            let table_offset = usize::try_from(read_u32(bytes, cursor + 2)?).ok()?;
+            let min_value = read_u32(bytes, cursor + 10)?;
+            let max_value = read_u32(bytes, cursor + 14)?;
+            if max_value < min_value {
+                return None;
+            }
+            let entry_count = max_value.checked_sub(min_value)?.checked_add(1)?;
+            let table_start = align4(cursor.checked_add(table_offset)?);
+            let table_end = table_start.checked_add(entry_count as usize * 4)?;
+            jump_tables.push(table_start..table_end);
+        } else if opcode == HERMES_V98_V99_STRING_SWITCH_IMM_OPCODE {
+            let table_offset = usize::try_from(read_u32(bytes, cursor + 6)?).ok()?;
+            let entry_count = read_u32(bytes, cursor + 14)?;
+            let table_start = align4(cursor.checked_add(table_offset)?);
+            let table_end = table_start.checked_add(entry_count as usize * 8)?;
+            jump_tables.push(table_start..table_end);
+        }
+
+        cursor = inst_end;
+    }
+
+    let post_opcode_segments = build_post_opcode_segments(opcode_end, body_end, jump_tables)?;
+
+    Some(HermesFunctionBodyLayout {
+        instructions,
+        post_opcode_segments,
+    })
+}
+
+fn build_post_opcode_segments(
+    opcode_end: usize,
+    body_end: usize,
+    mut jump_tables: Vec<std::ops::Range<usize>>,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    if opcode_end > body_end {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    let mut cursor = opcode_end;
+    let post_opcode_start = align4(opcode_end).min(body_end);
+
+    if cursor < post_opcode_start {
+        segments.push(cursor..post_opcode_start);
+        cursor = post_opcode_start;
+    }
+
+    jump_tables.sort_by_key(|range| range.start);
+    for table in jump_tables {
+        if table.start < post_opcode_start || table.end > body_end || table.start > table.end {
+            return None;
+        }
+        if table.start < cursor {
+            return None;
+        }
+        if cursor < table.start {
+            segments.push(cursor..table.start);
+        }
+        segments.push(table.clone());
+        cursor = table.end;
+    }
+
+    if cursor < body_end {
+        segments.push(cursor..body_end);
+    }
+
+    Some(segments)
+}
+
+fn align4(value: usize) -> usize {
+    (value + 3) & !3
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
 }
 
 fn append_prefix_suffix_diff(ops: &mut Vec<PatchOp>, old: &[u8], new: &[u8], old_base: usize) {

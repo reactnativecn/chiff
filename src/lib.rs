@@ -2,6 +2,7 @@ pub mod corpus;
 pub mod engine;
 pub mod format;
 pub mod hermes;
+mod hermes_opcodes;
 pub mod patch;
 
 pub use corpus::{

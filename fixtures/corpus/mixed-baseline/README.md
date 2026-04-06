@@ -31,7 +31,7 @@ Directory layout:
 Current `chiff` summary:
 
 - `paired=7`
-- `total_copy_ops=18`
+- `total_copy_ops=4658`
 - `total_insert_ops=17`
 - `total_copied_bytes=4791603`
 - `total_inserted_bytes=113`

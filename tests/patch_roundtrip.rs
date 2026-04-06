@@ -943,6 +943,24 @@ fn diff_bytes_preserves_common_middle_anchor_within_hermes_function_body() {
 }
 
 #[test]
+fn diff_bytes_preserves_unchanged_small_instruction_between_changed_hermes_instructions() {
+    let old = hermes_small_function_bytes(&[&[5, 0x10, 5, 0x20, 5, 0x30]]);
+    let new = hermes_small_function_bytes(&[&[5, 0x11, 5, 0x20, 5, 0x31]]);
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert_eq!(patch.stats().inserted_bytes, 2);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 142 && offset.saturating_add(*len) >= 144
+        )
+    }));
+}
+
+#[test]
 fn diff_bytes_preserves_common_line_anchor_for_text() {
     let old = b"alpha\nKEEP\nomega\n";
     let new = b"beta\nKEEP\ngamma\n";

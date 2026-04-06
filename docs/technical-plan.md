@@ -248,6 +248,7 @@ Hermes diff currently uses a cascading strategy:
 3. If function layout is available:
    - diff pre-bytecode gap
    - diff each function body separately
+   - when a body can be decoded using the embedded Hermes 98/99 opcode size table, diff opcode instructions and switch-table tail segments separately
    - diff bytecode-to-info alignment gap separately
    - diff each overflowed function info block as subregions:
      - large header
@@ -289,6 +290,7 @@ The following milestones are complete:
 - exception-table and debug-offset subrange parsing inside overflowed info blocks
 - section-aware Hermes diff
 - function-aware Hermes diff for both small and overflowed headers
+- instruction-aware Hermes diff for decodable 98/99 function bodies, with safe fallback to coarse body diff when decoding fails
 - per-info-block Hermes diff for overflowed function metadata
 - per-subregion Hermes diff for overflowed info metadata, so unchanged exception tables can survive changed large-header/debug payloads
 - middle-anchor resync inside diff regions, so unchanged interior byte runs can survive changed prefixes and suffixes
@@ -325,13 +327,19 @@ However, it still does not parse the internal meaning of those subregions, for e
 
 ### 2. Opcode-aware diff is not implemented
 
-Within a function body, `chiff` still uses byte-level prefix/suffix diff.
-It does not yet understand:
+Within a function body, `chiff` now has a shallow instruction-level split for
+Hermes 98/99 using embedded opcode sizes, but it still does not understand:
 
 - instruction boundaries
-- jump tables
+- operand semantics beyond switch-table tail extraction
 - operand classes
 - Hermes delta-relative operand normalization
+
+The current implementation is deliberately conservative:
+
+- if bytecode decoding fails, body diff falls back to the coarse per-function region strategy
+- switch tables are segmented structurally, but instruction operands are still compared as raw bytes
+- real-corpus runs currently show stable `inserted_bytes`, but `copy_op_count` can rise sharply, so op coalescing or selection heuristics remain future work
 
 ### 3. Debug-info semantics are still coarse
 
