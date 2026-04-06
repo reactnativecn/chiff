@@ -129,6 +129,11 @@ pub struct HermesFunctionLayout {
 pub struct HermesFunctionInfoBlock {
     pub index: u32,
     pub offset: u32,
+    pub large_header_end_offset: u32,
+    pub exception_table_offset: Option<u32>,
+    pub exception_table_end_offset: Option<u32>,
+    pub debug_offsets_offset: Option<u32>,
+    pub debug_offsets_end_offset: Option<u32>,
     pub payload_end_offset: u32,
     pub end_offset: u32,
     pub has_exception_handlers: bool,
@@ -500,7 +505,7 @@ fn build_info_blocks(
             .get(index + 1)
             .map(|(_, next_offset, _, _)| *next_offset)
             .unwrap_or(header.debug_info_offset);
-        let payload_end_offset = parse_function_info_payload_end(
+        let parsed_info = parse_function_info_payload(
             bytes,
             offset,
             end_offset,
@@ -511,7 +516,12 @@ fn build_info_blocks(
         info_blocks.push(HermesFunctionInfoBlock {
             index: function_index,
             offset,
-            payload_end_offset,
+            large_header_end_offset: parsed_info.large_header_end_offset,
+            exception_table_offset: parsed_info.exception_table_offset,
+            exception_table_end_offset: parsed_info.exception_table_end_offset,
+            debug_offsets_offset: parsed_info.debug_offsets_offset,
+            debug_offsets_end_offset: parsed_info.debug_offsets_end_offset,
+            payload_end_offset: parsed_info.payload_end_offset,
             end_offset,
             has_exception_handlers,
             has_debug_offsets,
@@ -521,33 +531,58 @@ fn build_info_blocks(
     Some(info_blocks)
 }
 
-fn parse_function_info_payload_end(
+struct ParsedFunctionInfoPayload {
+    large_header_end_offset: u32,
+    exception_table_offset: Option<u32>,
+    exception_table_end_offset: Option<u32>,
+    debug_offsets_offset: Option<u32>,
+    debug_offsets_end_offset: Option<u32>,
+    payload_end_offset: u32,
+}
+
+fn parse_function_info_payload(
     bytes: &[u8],
     info_offset: u32,
     max_end_offset: u32,
     has_exception_handlers: bool,
     has_debug_offsets: bool,
-) -> Option<u32> {
-    let mut cursor = info_offset.checked_add(LARGE_FUNC_HEADER_SIZE)?;
+) -> Option<ParsedFunctionInfoPayload> {
+    let large_header_end_offset = info_offset.checked_add(LARGE_FUNC_HEADER_SIZE)?;
+    let mut cursor = large_header_end_offset;
+    let mut exception_table_offset = None;
+    let mut exception_table_end_offset = None;
+    let mut debug_offsets_offset = None;
+    let mut debug_offsets_end_offset = None;
 
     if has_exception_handlers {
         cursor = align_to(cursor, BYTECODE_ALIGNMENT)?;
+        exception_table_offset = Some(cursor);
         let count = read_u32_at_u32(bytes, cursor, 0)?;
         let table_len = EXCEPTION_HANDLER_TABLE_HEADER_SIZE
             .checked_add(multiply_u32(count, EXCEPTION_HANDLER_INFO_SIZE)?)?;
         cursor = cursor.checked_add(table_len)?;
+        exception_table_end_offset = Some(cursor);
     }
 
     if has_debug_offsets {
         cursor = align_to(cursor, BYTECODE_ALIGNMENT)?;
+        debug_offsets_offset = Some(cursor);
         cursor = cursor.checked_add(DEBUG_OFFSETS_SIZE)?;
+        debug_offsets_end_offset = Some(cursor);
     }
 
     if cursor > max_end_offset {
         return None;
     }
 
-    Some(cursor)
+    Some(ParsedFunctionInfoPayload {
+        large_header_end_offset,
+        exception_table_offset,
+        exception_table_end_offset,
+        debug_offsets_offset,
+        debug_offsets_end_offset,
+        payload_end_offset: cursor,
+    })
 }
 
 fn push_section(

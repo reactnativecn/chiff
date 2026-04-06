@@ -78,6 +78,7 @@ Bindings should only expose stable library APIs.
 - [src/engine.rs](/Users/sunny/Documents/workspace/chiff/src/engine.rs): engine selection
 - [src/hermes.rs](/Users/sunny/Documents/workspace/chiff/src/hermes.rs): Hermes structural parsing
 - [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
+- [benches/diff_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/diff_cases.rs): synthetic benchmark harness for diff/apply cases
 - [bindings/node/native/src/lib.rs](/Users/sunny/Documents/workspace/chiff/bindings/node/native/src/lib.rs): Node-API binding
 
 ### Public model
@@ -139,7 +140,7 @@ All sections are aligned to 4 bytes, matching Hermes upstream behavior.
 
 - small function headers, where the function body offset and bytecode size are stored directly in the `SmallFuncHeader`
 - overflowed function headers, where the `SmallFuncHeader` stores the offset to a large `FunctionHeader`
-- overflowed function info blocks, including large headers and optional debug-offset payloads
+- overflowed function info blocks, including large headers, optional exception tables, and optional debug-offset payloads
 
 For each function, `chiff` currently derives:
 
@@ -152,6 +153,9 @@ For each function, `chiff` currently derives:
 For overflowed functions, `chiff` also derives per-function info blocks:
 
 - info block start
+- large-header end
+- optional exception-table range
+- optional debug-offset range
 - parsed payload end
 - padded block end
 - whether exception handlers are present
@@ -180,7 +184,12 @@ Hermes diff currently uses a cascading strategy:
 3. If function layout is available:
    - diff pre-bytecode gap
    - diff each function body separately
-   - diff each overflowed function info block separately when available
+   - diff bytecode-to-info alignment gap separately
+   - diff each overflowed function info block as subregions:
+     - large header
+     - exception-table payload
+     - debug-offset payload
+     - trailing padding
    - otherwise diff post-bytecode pre-debug gap
 4. Otherwise:
    - diff the whole non-debug tail as one region
@@ -198,9 +207,12 @@ The following milestones are complete:
 - small-header function layout parsing
 - overflowed large-header function layout parsing
 - overflowed function info block parsing
+- exception-table and debug-offset subrange parsing inside overflowed info blocks
 - section-aware Hermes diff
 - function-aware Hermes diff for both small and overflowed headers
 - per-info-block Hermes diff for overflowed function metadata
+- per-subregion Hermes diff for overflowed info metadata, so unchanged exception tables can survive changed large-header/debug payloads
+- synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Rust crate verification
 - Node and Bun smoke-test verification through one Node-API addon
 
@@ -208,16 +220,21 @@ The following milestones are complete:
 
 The following areas are still intentionally incomplete:
 
-### 1. Function info substructure is still coarse
+### 1. Function info parsing is still range-based, not semantic
 
-For overflowed functions, the parser now exposes per-function info block ranges.
-However, it still does not break those blocks into first-class subregions such as:
+For overflowed functions, the parser now exposes:
 
-- exception table ranges
-- exception entry arrays
-- debug-offset subranges as distinct compare units
+- large-header range
+- exception-table range
+- debug-offset range
+- padded info-block end
 
-This means unchanged info blocks can now survive neighboring changes, but unchanged exception/debug subparts inside a changed block are not yet isolated.
+This is enough to preserve unchanged subregions inside a changed info block.
+However, it still does not parse the internal meaning of those subregions, for example:
+
+- individual exception entries
+- specific debug-offset fields
+- future metadata payload variants if Hermes changes the info layout
 
 ### 2. Opcode-aware diff is not implemented
 
@@ -238,9 +255,10 @@ It does not yet perform:
 - token-aware matching
 - chunk re-synchronization
 
-### 4. No benchmark harness yet
+### 4. Benchmarking is still synthetic
 
-We have external baselines, but not yet an internal benchmark suite that records:
+We now have a local Criterion harness for representative text and Hermes cases.
+However, we do not yet have a corpus-driven benchmark suite that records:
 
 - patch size
 - generation time
@@ -263,20 +281,20 @@ Why:
 
 ### Stage 2: Function info subregions
 
-Next priority:
+Completed:
 
-- parse exception table subranges inside function info blocks
+- parse exception-table subranges inside function info blocks
 - parse debug-offset subranges explicitly
 - allow per-function info diff to preserve unchanged subregions within a changed info block
 
-Why:
+Why it mattered:
 
 - Hermes metadata churn often lands inside function info rather than across the whole block
-- subregion segmentation should preserve more unchanged metadata when only part of an info block changes
+- subregion segmentation preserves more unchanged metadata when only part of an info block changes
 
 ### Stage 3: Function body substructure
 
-After function info layout:
+Next priority:
 
 - identify bytecode body vs jump table tail
 - preserve aligned jump-table regions separately when possible
@@ -308,7 +326,7 @@ For text bundles:
 Add:
 
 - fixture corpus management
-- benchmark commands
+- benchmark commands and report conventions
 - artifact reports comparing `chiff` to HDiffPatch / bsdiff / xdelta3 / zstd patch-from
 
 ## Validation Strategy
@@ -345,6 +363,7 @@ Validate the optimization property, not just correctness:
 - unchanged function remains copyable after earlier function growth
 - same property holds for overflowed large-header functions
 - unchanged overflowed function info block remains copyable between changed neighboring info blocks
+- unchanged exception table remains copyable inside a changed overflowed info block
 
 ## Compatibility Strategy
 
@@ -367,9 +386,9 @@ If new APIs are exposed to Node/Bun, they should come from crate-level stable fu
 
 The immediate next implementation step after this document is:
 
-1. Split function info blocks into exception-table and debug-offset subregions.
-2. Add regression tests showing preserved copy behavior for unchanged subregions inside changed info blocks.
-3. Decide whether the next high-value step is Hermes opcode structure or benchmark harness work.
+1. Decide whether to split Hermes function bodies into finer structural subregions before opcode parsing.
+2. Add a benchmark harness so new structure-aware changes can be evaluated against patch size and runtime, not just correctness.
+3. Use those measurements to choose between opcode-aware Hermes refinement and text-diff refinement as the next branch.
 
 After that, the most valuable branch point is:
 

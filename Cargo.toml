@@ -12,3 +12,10 @@ name = "chiff"
 path = "src/lib.rs"
 
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "diff_cases"
+harness = false

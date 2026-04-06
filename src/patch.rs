@@ -1,4 +1,7 @@
-use crate::{parse_artifact, select_engine, EngineKind, HermesSection, HermesSectionKind};
+use crate::{
+    parse_artifact, select_engine, EngineKind, HermesFunctionInfoBlock, HermesSection,
+    HermesSectionKind,
+};
 
 const HERMES_HEADER_LEN: usize = 128;
 const HERMES_SECTION_ORDER: [HermesSectionKind; 15] = [
@@ -167,24 +170,38 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
                     ..new_artifact.header.debug_info_offset as usize,
             );
         } else {
+            let old_info_start = old_functions
+                .info_blocks
+                .first()
+                .map(|block| block.offset as usize)
+                .unwrap_or(old_artifact.header.debug_info_offset as usize);
+            let new_info_start = new_functions
+                .info_blocks
+                .first()
+                .map(|block| block.offset as usize)
+                .unwrap_or(new_artifact.header.debug_info_offset as usize);
+
+            append_region_diff(
+                &mut ops,
+                old,
+                new,
+                old_functions.bytecode_region_end as usize..old_info_start,
+                new_functions.bytecode_region_end as usize..new_info_start,
+            );
+
             let info_block_count = old_functions
                 .info_blocks
                 .len()
                 .max(new_functions.info_blocks.len());
 
             for info_block_index in 0..info_block_count {
-                let old_range = old_functions
-                    .info_blocks
-                    .get(info_block_index)
-                    .map(|block| block.offset as usize..block.end_offset as usize)
-                    .unwrap_or(0..0);
-                let new_range = new_functions
-                    .info_blocks
-                    .get(info_block_index)
-                    .map(|block| block.offset as usize..block.end_offset as usize)
-                    .unwrap_or(0..0);
-
-                append_region_diff(&mut ops, old, new, old_range, new_range);
+                append_info_block_diff(
+                    &mut ops,
+                    old,
+                    new,
+                    old_functions.info_blocks.get(info_block_index),
+                    new_functions.info_blocks.get(info_block_index),
+                );
             }
         }
     } else {
@@ -237,6 +254,119 @@ fn append_region_diff(
         &new[new_range],
         old_range.start,
     );
+}
+
+fn append_info_block_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_block: Option<&HermesFunctionInfoBlock>,
+    new_block: Option<&HermesFunctionInfoBlock>,
+) {
+    let old_ranges = info_block_ranges(old_block);
+    let new_ranges = info_block_ranges(new_block);
+
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.large_header,
+        new_ranges.large_header,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.pre_exception_padding,
+        new_ranges.pre_exception_padding,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.exception_table,
+        new_ranges.exception_table,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.pre_debug_padding,
+        new_ranges.pre_debug_padding,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.debug_offsets,
+        new_ranges.debug_offsets,
+    );
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_ranges.trailing_padding,
+        new_ranges.trailing_padding,
+    );
+}
+
+#[derive(Debug, Clone)]
+struct HermesInfoBlockRanges {
+    large_header: std::ops::Range<usize>,
+    pre_exception_padding: std::ops::Range<usize>,
+    exception_table: std::ops::Range<usize>,
+    pre_debug_padding: std::ops::Range<usize>,
+    debug_offsets: std::ops::Range<usize>,
+    trailing_padding: std::ops::Range<usize>,
+}
+
+fn info_block_ranges(block: Option<&HermesFunctionInfoBlock>) -> HermesInfoBlockRanges {
+    let Some(block) = block else {
+        return HermesInfoBlockRanges {
+            large_header: 0..0,
+            pre_exception_padding: 0..0,
+            exception_table: 0..0,
+            pre_debug_padding: 0..0,
+            debug_offsets: 0..0,
+            trailing_padding: 0..0,
+        };
+    };
+
+    let large_header = block.offset as usize..block.large_header_end_offset as usize;
+    let pre_exception_padding = match block.exception_table_offset {
+        Some(exception_offset) => block.large_header_end_offset as usize..exception_offset as usize,
+        None => 0..0,
+    };
+    let exception_table = match (
+        block.exception_table_offset,
+        block.exception_table_end_offset,
+    ) {
+        (Some(start), Some(end)) => start as usize..end as usize,
+        _ => 0..0,
+    };
+    let pre_debug_padding = match block.debug_offsets_offset {
+        Some(debug_offset) => {
+            let start = block
+                .exception_table_end_offset
+                .unwrap_or(block.large_header_end_offset);
+            start as usize..debug_offset as usize
+        }
+        None => 0..0,
+    };
+    let debug_offsets = match (block.debug_offsets_offset, block.debug_offsets_end_offset) {
+        (Some(start), Some(end)) => start as usize..end as usize,
+        _ => 0..0,
+    };
+    let trailing_padding = block.payload_end_offset as usize..block.end_offset as usize;
+
+    HermesInfoBlockRanges {
+        large_header,
+        pre_exception_padding,
+        exception_table,
+        pre_debug_padding,
+        debug_offsets,
+        trailing_padding,
+    }
 }
 
 fn append_prefix_suffix_diff(ops: &mut Vec<PatchOp>, old: &[u8], new: &[u8], old_base: usize) {
