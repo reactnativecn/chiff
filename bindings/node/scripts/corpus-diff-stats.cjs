@@ -38,7 +38,7 @@ let totalCopiedBytes = 0;
 let totalInsertedBytes = 0;
 
 console.log(
-  'path\tstatus\told_format\tnew_format\tselected_engine\told_structured_hermes_compatible\tnew_structured_hermes_compatible\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes',
+  'path\tstatus\told_format\tnew_format\tselected_engine\tselected_engine_reason\told_structured_hermes_support\tnew_structured_hermes_support\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes',
 );
 
 for (const relativePath of relativePaths) {
@@ -75,9 +75,12 @@ for (const relativePath of relativePaths) {
     insertedBytes: 0,
   };
   let selectedEngine = '-';
+  let selectedEngineReason = '-';
 
   if (oldBytes && newBytes) {
-    selectedEngine = chiff.selectEngineName(oldBytes, newBytes);
+    const decision = chiff.selectEngineDecisionResult(oldBytes, newBytes);
+    selectedEngine = decision.kind;
+    selectedEngineReason = decision.reason;
     stats = chiff.diffStats(oldBytes, newBytes);
     totalPairs += 1;
     totalCopyOps += stats.copyOpCount;
@@ -93,8 +96,9 @@ for (const relativePath of relativePaths) {
       oldFormat,
       newFormat,
       selectedEngine,
-      oldBytes ? String(chiff.structuredHermesCompatible(oldBytes)) : '-',
-      newBytes ? String(chiff.structuredHermesCompatible(newBytes)) : '-',
+      selectedEngineReason,
+      oldBytes ? chiff.structuredHermesSupport(oldBytes).status : '-',
+      newBytes ? chiff.structuredHermesSupport(newBytes).status : '-',
       stats.opCount,
       stats.copyOpCount,
       stats.insertOpCount,
@@ -108,6 +112,7 @@ console.log(
   [
     'TOTAL',
     `paired=${totalPairs}`,
+    '-',
     '-',
     '-',
     '-',

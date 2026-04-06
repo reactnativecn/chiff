@@ -55,6 +55,29 @@ const DEBUG_INFO_FILENAME_ENTRY_SIZE: u32 = 8;
 const DEBUG_FILE_REGION_ENTRY_SIZE: u32 = 12;
 pub const SUPPORTED_STRUCTURED_HERMES_VERSIONS: &[u32] = &[98, 99];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructuredHermesSupport {
+    NotHermes,
+    InvalidHeader,
+    UnsupportedVersion { version: u32, form: HermesForm },
+    Supported { version: u32, form: HermesForm },
+}
+
+impl StructuredHermesSupport {
+    pub fn is_supported(self) -> bool {
+        matches!(self, Self::Supported { .. })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotHermes => "not_hermes",
+            Self::InvalidHeader => "invalid_header",
+            Self::UnsupportedVersion { .. } => "unsupported_version",
+            Self::Supported { .. } => "supported",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesHeader {
     pub version: u32,
@@ -208,10 +231,24 @@ pub fn supports_structured_hermes_version(version: u32) -> bool {
     SUPPORTED_STRUCTURED_HERMES_VERSIONS.contains(&version)
 }
 
+pub fn assess_structured_hermes(bytes: &[u8]) -> StructuredHermesSupport {
+    let InputFormat::HermesBytecode { version, form } = detect_input_format(bytes) else {
+        return StructuredHermesSupport::NotHermes;
+    };
+
+    if parse_header(bytes).is_none() {
+        return StructuredHermesSupport::InvalidHeader;
+    }
+
+    if supports_structured_hermes_version(version) {
+        StructuredHermesSupport::Supported { version, form }
+    } else {
+        StructuredHermesSupport::UnsupportedVersion { version, form }
+    }
+}
+
 pub fn can_use_structured_hermes(bytes: &[u8]) -> bool {
-    parse_header(bytes)
-        .map(|header| supports_structured_hermes_version(header.version))
-        .unwrap_or(false)
+    assess_structured_hermes(bytes).is_supported()
 }
 
 pub fn parse_artifact(bytes: &[u8]) -> Option<HermesArtifact> {

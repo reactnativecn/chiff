@@ -12,6 +12,15 @@ function hermesBytes(version) {
   return bytes;
 }
 
+function hermesHeaderBytes(version) {
+  const bytes = Buffer.alloc(128);
+  bytes.writeBigUInt64LE(HERMES_MAGIC, 0);
+  bytes.writeUInt32LE(version, 8);
+  bytes.writeUInt32LE(128, 32);
+  bytes.writeUInt32LE(128, 108);
+  return bytes;
+}
+
 const textResult = chiff.detectFormat(Buffer.from('const answer = 42;\n'));
 assert.deepEqual(textResult, { kind: 'text_utf8' });
 
@@ -39,3 +48,15 @@ assert.equal(
   'text',
 );
 assert.equal(chiff.structuredHermesCompatible(hermesBytes(99)), false);
+assert.deepEqual(
+  chiff.selectEngineDecisionResult(Buffer.from('const a = 1;\n'), Buffer.from('const a = 2;\n')),
+  { kind: 'text', reason: 'text_pair' },
+);
+assert.deepEqual(chiff.structuredHermesSupport(hermesHeaderBytes(99)), {
+  status: 'supported',
+  version: 99,
+  form: 'execution',
+});
+assert.deepEqual(chiff.structuredHermesSupport(hermesBytes(99)), {
+  status: 'invalid_header',
+});

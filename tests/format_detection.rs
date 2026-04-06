@@ -1,11 +1,11 @@
-use chiff::engine::{select_engine, EngineKind};
+use chiff::engine::{select_engine, select_engine_decision, EngineKind, EngineReason};
 use chiff::format::{detect_input_format, HermesForm, InputFormat};
 use chiff::hermes::{
-    can_use_structured_hermes, parse_artifact, parse_debug_info_layout, parse_function_layout,
-    parse_header, parse_section_layout, supports_structured_hermes_version, HermesArtifact,
-    HermesDebugDataStream, HermesDebugFileRegion, HermesDebugInfoHeader, HermesDebugInfoLayout,
-    HermesFunction, HermesFunctionInfoBlock, HermesFunctionLayout, HermesHeader, HermesSection,
-    HermesSectionKind, HermesSectionLayout,
+    assess_structured_hermes, can_use_structured_hermes, parse_artifact, parse_debug_info_layout,
+    parse_function_layout, parse_header, parse_section_layout, supports_structured_hermes_version,
+    HermesArtifact, HermesDebugDataStream, HermesDebugFileRegion, HermesDebugInfoHeader,
+    HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock, HermesFunctionLayout,
+    HermesHeader, HermesSection, HermesSectionKind, HermesSectionLayout, StructuredHermesSupport,
 };
 
 const HERMES_MAGIC: u64 = 0x1F19_03C1_03BC_1FC6;
@@ -643,6 +643,10 @@ fn selects_hermes_engine_for_same_version_hermes_inputs() {
     });
 
     assert_eq!(select_engine(&old, &new), EngineKind::Hermes);
+    assert_eq!(
+        select_engine_decision(&old, &new).reason,
+        EngineReason::HermesStructured
+    );
 }
 
 #[test]
@@ -696,11 +700,48 @@ fn structured_hermes_compatibility_rejects_truncated_or_unknown_inputs() {
 }
 
 #[test]
+fn assess_structured_hermes_reports_reason_codes() {
+    let supported = hermes_header_bytes(HeaderSpec::default());
+    let unsupported = hermes_header_bytes(HeaderSpec {
+        version: 100,
+        ..HeaderSpec::default()
+    });
+    let truncated = hermes_bytes(HERMES_MAGIC, 99);
+
+    assert_eq!(
+        assess_structured_hermes(&supported),
+        StructuredHermesSupport::Supported {
+            version: 99,
+            form: HermesForm::Execution,
+        }
+    );
+    assert_eq!(
+        assess_structured_hermes(&unsupported),
+        StructuredHermesSupport::UnsupportedVersion {
+            version: 100,
+            form: HermesForm::Execution,
+        }
+    );
+    assert_eq!(
+        assess_structured_hermes(&truncated),
+        StructuredHermesSupport::InvalidHeader
+    );
+    assert_eq!(
+        assess_structured_hermes(b"plain text"),
+        StructuredHermesSupport::NotHermes
+    );
+}
+
+#[test]
 fn falls_back_to_generic_binary_for_truncated_same_version_hermes_inputs() {
     let old = hermes_bytes(HERMES_MAGIC, 99);
     let new = hermes_bytes(HERMES_MAGIC, 99);
 
     assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
+    assert_eq!(
+        select_engine_decision(&old, &new).reason,
+        EngineReason::HermesOldInvalidHeader
+    );
 }
 
 #[test]
@@ -709,6 +750,10 @@ fn falls_back_to_generic_binary_when_hermes_versions_differ() {
     let new = hermes_bytes(HERMES_MAGIC, 99);
 
     assert_eq!(select_engine(&old, &new), EngineKind::GenericBinary);
+    assert_eq!(
+        select_engine_decision(&old, &new).reason,
+        EngineReason::HermesVersionMismatch
+    );
 }
 
 #[test]

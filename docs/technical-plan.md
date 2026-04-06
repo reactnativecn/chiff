@@ -19,6 +19,7 @@ Today that also means the Hermes-aware path is intentionally conservative:
 - structured Hermes diff is only enabled for explicitly validated bytecode versions
 - both sides must have the same Hermes bytecode version and the same bytecode form
 - if header parsing or later structural parsing fails, patch generation falls back to generic binary diff
+- engine selection and Hermes compatibility are exposed as reason/status codes, not just booleans
 
 The current surrounding ecosystem baseline is documented in [baselines.md](/Users/sunny/Documents/workspace/chiff/docs/baselines.md).
 
@@ -101,6 +102,7 @@ Bindings should only expose stable library APIs.
 - input format detection
 - engine selection
 - structured Hermes compatibility helpers:
+  - `assess_structured_hermes`
   - `supports_structured_hermes_version`
   - `can_use_structured_hermes`
 - Hermes header parsing

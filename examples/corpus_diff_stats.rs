@@ -1,4 +1,4 @@
-use chiff::{can_use_structured_hermes, detect_input_format, diff_bytes, select_engine};
+use chiff::{assess_structured_hermes, detect_input_format, diff_bytes, select_engine_decision};
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -42,7 +42,7 @@ fn main() {
     let mut total_inserted_bytes = 0usize;
 
     println!(
-        "path\tstatus\told_format\tnew_format\tselected_engine\told_structured_hermes_compatible\tnew_structured_hermes_compatible\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes"
+        "path\tstatus\told_format\tnew_format\tselected_engine\tselected_engine_reason\told_structured_hermes_support\tnew_structured_hermes_support\top_count\tcopy_ops\tinsert_ops\tcopied_bytes\tinserted_bytes"
     );
 
     for relative_path in relative_paths {
@@ -88,28 +88,36 @@ fn main() {
             _ => (0, 0, 0, 0, 0),
         };
 
-        let selected_engine = match (old_bytes.as_deref(), new_bytes.as_deref()) {
-            (Some(old), Some(new)) => format!("{:?}", select_engine(old, new)),
-            _ => String::from("-"),
-        };
+        let (selected_engine, selected_engine_reason) =
+            match (old_bytes.as_deref(), new_bytes.as_deref()) {
+                (Some(old), Some(new)) => {
+                    let decision = select_engine_decision(old, new);
+                    (
+                        String::from(decision.kind.as_str()),
+                        String::from(decision.reason.as_str()),
+                    )
+                }
+                _ => (String::from("-"), String::from("-")),
+            };
         let old_structured_hermes = old_bytes
             .as_deref()
-            .map(can_use_structured_hermes)
-            .map(|value| value.to_string())
+            .map(assess_structured_hermes)
+            .map(|value| String::from(value.as_str()))
             .unwrap_or_else(|| String::from("-"));
         let new_structured_hermes = new_bytes
             .as_deref()
-            .map(can_use_structured_hermes)
-            .map(|value| value.to_string())
+            .map(assess_structured_hermes)
+            .map(|value| String::from(value.as_str()))
             .unwrap_or_else(|| String::from("-"));
 
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             relative_path.display(),
             status,
             old_format,
             new_format,
             selected_engine,
+            selected_engine_reason,
             old_structured_hermes,
             new_structured_hermes,
             stats.0,
@@ -121,7 +129,7 @@ fn main() {
     }
 
     println!(
-        "TOTAL\tpaired={}\t-\t-\t-\t-\t-\t-\t{}\t{}\t{}\t{}",
+        "TOTAL\tpaired={}\t-\t-\t-\t-\t-\t-\t-\t{}\t{}\t{}\t{}",
         total_pairs, total_copy_ops, total_insert_ops, total_copied_bytes, total_inserted_bytes
     );
 }
