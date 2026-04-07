@@ -65,8 +65,9 @@ commands and wraps their hdiff implementation internally:
 2. Optionally load `@chiff/node`.
 3. If `RNU_CHIFF_HPATCH_POLICY=costed` is enabled and both `diffWithCovers` and
    `hpatchCompatiblePlanResult` are available, generate `chiff` cover lines and
-   pass them to `diffWithCovers`. The wrapper also generates the native hdiff
-   payload and keeps the smaller of the two standard hpatch-compatible outputs.
+   pass them to `diffWithCovers` in both `replace` and `merge` modes. The wrapper
+   also generates the native hdiff payload and keeps the smallest standard
+   hpatch-compatible output.
 4. If the native hdiff payload is below `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`
    (`4096` bytes by default), skip structured planning and keep native hdiff.
 5. If loading, cover generation, or `diffWithCovers` fails, fall back to the
@@ -80,18 +81,21 @@ patch side does not need to change.
 
 ## Policy
 
-The compatible bridge should eventually support three policies:
+The compatible bridge now supports three serialized candidates:
 
 - `hdiff_native`: no listener, current behavior.
 - `chiff_structured`: replace HDiffPatch's computed covers with `chiff` covers.
-- `merged_costed`: compare or merge both cover sets, then use the lower-risk or
-  lower-cost result.
+- `merged_costed`: preserve HDiffPatch's native covers and insert `chiff` covers
+  only into uncovered new-file gaps before serialization.
+- `native-coalesce`: preserve HDiffPatch's native cover selection but coalesce
+  adjacent native covers with the same old/new offset delta across small gaps.
 
-The current `chiff` crate only implements the `chiff_structured` cover-plan
-export. Production default should not switch to that blindly. It is currently
-opt-in because HDiffPatch's approximate raw-byte covers may beat `chiff`'s exact
-covers on real Hermes inputs, and some structured planning paths are still too
-slow for server defaults.
+The current `chiff` crate exports structured cover plans, and the
+`node-hdiffpatch` bridge implements replacement, merge injection, and native
+coalescing modes. Production default should not switch to these blindly. They
+are currently opt-in because HDiffPatch's approximate raw-byte covers may beat
+`chiff`'s exact covers on real Hermes inputs, and some structured planning paths
+are still too slow for server defaults.
 
 ## Compatibility Constraints
 

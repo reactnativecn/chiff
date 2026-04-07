@@ -21,8 +21,8 @@ pub use hermes::{
     StructuredHermesSupport, SUPPORTED_STRUCTURED_HERMES_VERSIONS,
 };
 pub use hpatch::{
-    build_hpatch_compatible_plan, HpatchCompatiblePlan, HpatchCompatiblePlanError,
-    HpatchCompatiblePlanStats, HpatchCover, HpatchCoverSelectionPolicy,
+    build_hpatch_approximate_plan, build_hpatch_compatible_plan, HpatchCompatiblePlan,
+    HpatchCompatiblePlanError, HpatchCompatiblePlanStats, HpatchCover, HpatchCoverSelectionPolicy,
 };
 pub use output::{OptimizationCompatibility, PatchOutputMode};
 pub use patch::{

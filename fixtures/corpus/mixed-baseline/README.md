@@ -52,3 +52,20 @@ Expected support counts for both old and new:
 - `not_hermes=2`
 - `unsupported_version=1`
 - `invalid_header=1`
+
+Current hpatch-compatible report:
+
+- native hdiff total: `348` bytes
+- `chiff_structured` replacement total: `355` bytes
+- merged native-plus-`chiff` total: `347` bytes
+- approximate section/body merge total: `354` bytes
+- native same-delta gap coalescing total: `348` bytes
+- serialized costed selection total: `346` bytes
+- selected winners: native `6`, structured `1`, merged `0`,
+  coalesced native `0`
+
+The merged candidate lowers the aggregate merged total below native, but the
+per-file serialized winner is still mostly native. This corpus should remain a
+guardrail against enabling structured covers without a serialized-size policy.
+The coalescing candidate is neutral on this mixed corpus and remains useful
+because it wins on the larger `bundle-label-copy-edit` real Hermes pair.

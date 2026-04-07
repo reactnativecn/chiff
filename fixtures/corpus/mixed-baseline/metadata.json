@@ -31,5 +31,19 @@
     "not_hermes": 2,
     "unsupported_version": 1,
     "invalid_header": 1
+  },
+  "current_hpatch_policy_report": {
+    "native_patch_bytes": 348,
+    "structured_patch_bytes": 355,
+    "merged_patch_bytes": 347,
+    "approx_merged_patch_bytes": 354,
+    "coalesced_native_patch_bytes": 348,
+    "selected_patch_bytes": 346,
+    "selected_delta_bytes": -2,
+    "selected_native": 6,
+    "selected_structured": 1,
+    "selected_merged": 0,
+    "selected_approx_merged": 0,
+    "selected_coalesced_native": 0
   }
 }

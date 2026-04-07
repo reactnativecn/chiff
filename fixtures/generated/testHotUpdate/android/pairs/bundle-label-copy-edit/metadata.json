@@ -71,21 +71,38 @@
     "text": {
       "native_patch_bytes": 60,
       "structured_patch_bytes": 63,
+      "merged_patch_bytes": 60,
+      "approx_merged_patch_bytes": 60,
+      "coalesced_native_patch_bytes": 60,
       "selected_patch_bytes": 60,
       "winner": "hdiff_native"
     },
     "hermes": {
       "native_patch_bytes": 797,
       "structured_patch_bytes": 17068,
-      "selected_patch_bytes": 797,
-      "winner": "hdiff_native",
-      "structured_plan_ms": 81548.543
+      "merged_patch_bytes": 797,
+      "approx_merged_patch_bytes": 797,
+      "coalesced_native_patch_bytes": 783,
+      "selected_patch_bytes": 783,
+      "winner": "hdiff_native_coalesced",
+      "structured_plan_ms": 137387.317,
+      "approx_plan_ms": 265.007,
+      "native_cover_count": 6,
+      "native_covered_bytes": 2697479,
+      "native_uncovered_new_bytes": 33,
+      "chiff_cover_native_gap_bytes": 0,
+      "approx_cover_count": 16,
+      "approx_chiff_cover_native_gap_bytes": 13,
+      "coalesced_native_cover_count": 5
     },
     "total": {
       "native_patch_bytes": 857,
       "structured_patch_bytes": 17131,
-      "selected_patch_bytes": 857,
-      "selected_delta_bytes": 0
+      "merged_patch_bytes": 857,
+      "approx_merged_patch_bytes": 857,
+      "coalesced_native_patch_bytes": 843,
+      "selected_patch_bytes": 843,
+      "selected_delta_bytes": -14
     }
   }
 }

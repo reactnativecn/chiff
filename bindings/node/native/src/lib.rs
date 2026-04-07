@@ -1,7 +1,8 @@
 use chiff::{
-    analyze_diff, analyze_directory_pair, assess_structured_hermes, build_hpatch_compatible_plan,
-    detect_input_format, select_engine, select_engine_decision, CorpusEntryStatus, EngineDecision,
-    HermesForm, HpatchCoverSelectionPolicy, InputFormat, StructuredHermesSupport,
+    analyze_diff, analyze_directory_pair, assess_structured_hermes, build_hpatch_approximate_plan,
+    build_hpatch_compatible_plan, detect_input_format, select_engine, select_engine_decision,
+    CorpusEntryStatus, EngineDecision, HermesForm, HpatchCompatiblePlan,
+    HpatchCoverSelectionPolicy, InputFormat, StructuredHermesSupport,
 };
 use napi::bindgen_prelude::{Buffer, Result};
 use napi_derive::napi;
@@ -170,6 +171,32 @@ fn build_analyze_diff_result(old_input: &[u8], new_input: &[u8]) -> AnalyzeDiffR
     }
 }
 
+fn hpatch_plan_result(
+    plan: HpatchCompatiblePlan,
+    policy: HpatchCoverSelectionPolicy,
+) -> HpatchCompatiblePlanResult {
+    let stats = plan.stats();
+
+    HpatchCompatiblePlanResult {
+        output_mode: String::from(plan.output_mode().as_str()),
+        cover_policy: String::from(policy.as_str()),
+        old_size: plan.old_size.to_string(),
+        new_size: plan.new_size.to_string(),
+        cover_count: stats.cover_count as u32,
+        covered_bytes: stats.covered_bytes.to_string(),
+        uncovered_new_bytes: stats.uncovered_new_bytes.to_string(),
+        covers: plan
+            .covers
+            .into_iter()
+            .map(|cover| HpatchCoverResult {
+                old_pos: cover.old_pos.to_string(),
+                new_pos: cover.new_pos.to_string(),
+                len: cover.len.to_string(),
+            })
+            .collect(),
+    }
+}
+
 fn input_format_name(format: InputFormat) -> String {
     match format {
         InputFormat::Binary => String::from("binary"),
@@ -251,26 +278,22 @@ pub fn hpatch_compatible_plan_result(
     let analysis = analyze_diff(&old_input, &new_input);
     let plan = build_hpatch_compatible_plan(old_input.len(), &analysis.patch)
         .map_err(|error| napi::Error::from_reason(format!("{error:?}")))?;
-    let stats = plan.stats();
 
-    Ok(HpatchCompatiblePlanResult {
-        output_mode: String::from(plan.output_mode().as_str()),
-        cover_policy: String::from(HpatchCoverSelectionPolicy::ChiffStructured.as_str()),
-        old_size: plan.old_size.to_string(),
-        new_size: plan.new_size.to_string(),
-        cover_count: stats.cover_count as u32,
-        covered_bytes: stats.covered_bytes.to_string(),
-        uncovered_new_bytes: stats.uncovered_new_bytes.to_string(),
-        covers: plan
-            .covers
-            .into_iter()
-            .map(|cover| HpatchCoverResult {
-                old_pos: cover.old_pos.to_string(),
-                new_pos: cover.new_pos.to_string(),
-                len: cover.len.to_string(),
-            })
-            .collect(),
-    })
+    Ok(hpatch_plan_result(
+        plan,
+        HpatchCoverSelectionPolicy::ChiffStructured,
+    ))
+}
+
+#[napi]
+pub fn hpatch_approximate_plan_result(
+    old_input: Buffer,
+    new_input: Buffer,
+) -> Result<HpatchCompatiblePlanResult> {
+    Ok(hpatch_plan_result(
+        build_hpatch_approximate_plan(&old_input, &new_input),
+        HpatchCoverSelectionPolicy::ChiffApproximate,
+    ))
 }
 
 #[napi]

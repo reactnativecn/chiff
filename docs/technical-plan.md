@@ -31,6 +31,8 @@ The hpatch-compatible output boundary is documented in
 [hpatch-compatibility.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-compatibility.md).
 The HDiffPatch listener bridge is documented in
 [hpatch-listener-bridge.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-listener-bridge.md).
+The hpatch-compatible optimization analysis is documented in
+[hpatch-compatible-optimization-analysis.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-compatible-optimization-analysis.md).
 
 ## Non-goals
 
@@ -371,6 +373,12 @@ The following milestones are complete:
   without adding server task types or changing the SDK patch side
 - costed CLI selection between native hdiff and `chiff`-cover hpatch payloads,
   so an experimental cover plan does not enlarge the production artifact
+- merged hpatch-compatible cover injection in `node-hdiffpatch`, preserving
+  native HDiffPatch covers and inserting `chiff` covers only into uncovered
+  new-file gaps
+- native HDiffPatch cover coalescing in `node-hdiffpatch`, which preserves
+  standard hpatch output while merging adjacent same-delta native covers across
+  small gaps
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Criterion mixed-corpus benchmark harness covering real text/Hermes pairs plus generic-binary and Hermes fallback pairs
 - Rust crate verification
@@ -448,28 +456,36 @@ It now performs a conservative middle-anchor resync, but it still does not perfo
 - token-aware matching
 - multi-anchor / token-level re-synchronization
 
-### 5. Hpatch-compatible generation still needs policy selection
+### 5. Hpatch-compatible generation still needs broader policy validation
 
 `chiff` can export hpatch cover-plan coordinates from its internal patch IR, and
 `node-hdiffpatch.diffWithCovers` can serialize those plans into a standard
 HDiffPatch-compatible payload. `react-native-update-cli` can use that path inside
 the existing `hdiff` commands when both `@chiff/node` and the enhanced
 `node-hdiffpatch` are available. The current CLI integration is opt-in and
-costed: `RNU_CHIFF_HPATCH_POLICY=costed` generates native hdiff and
-`chiff`-cover hpatch payloads, then keeps the smaller payload. The default path
-still uses native hdiff only. Even in `costed` mode, the CLI skips structured
-planning when the native hdiff payload is below
-`RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`, which defaults to 4096 bytes.
+costed: `RNU_CHIFF_HPATCH_POLICY=costed` generates native hdiff, `chiff` cover
+replacement, and merged native-plus-`chiff` hpatch payloads, then keeps the
+smallest payload. The default path still uses native hdiff only. Even in
+`costed` mode, the CLI skips structured planning when the native hdiff payload
+is below `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`, which defaults to 4096 bytes.
+The current report also evaluates `native-coalesce`, a cheaper hpatch-compatible
+candidate that post-processes HDiffPatch's native covers without requiring a
+Hermes structured plan.
 
 The compatibility path still needs:
 
 - broader corpus reports before making `chiff_structured` the unconditional
   default
-- a future `merged_costed` policy that can combine hdiff-native covers and
-  `chiff` covers instead of choosing between two serialized payloads
+- more corpus validation for the current `merged_costed` candidate, which can
+  combine hdiff-native covers and `chiff` covers while still emitting a standard
+  hpatch payload
+- more corpus validation for `native-coalesce`; it improves the
+  `bundle-label-copy-edit` real Hermes pair from 857 to 843 bytes but is neutral
+  on the current mixed corpus
 - a faster hpatch-compatible planner, because the `bundle-label-copy-edit` real
-  Hermes pair currently spends about 81.5s in `chiff_structured` planning and
-  still serializes much larger than native hdiff
+  Hermes pair currently spends about 137s in `chiff_structured` planning; merge
+  avoids the serialized-size blow-up on that pair, but it cannot avoid the
+  planner cost
 - threshold tuning for `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES` across a larger
   corpus, because small native hdiff patches have little room for meaningful
   structured-cover wins
@@ -582,7 +598,7 @@ For existing `react-native-update` clients:
 - compare native hdiff and `chiff`-cover serialized payloads and keep the
   smaller one in `react-native-update-cli` (done)
 - compare `chiff` covers, hdiff-native covers, and merged-costed covers at the
-  cover-policy level
+  cover-policy level (first merged candidate done through `node-hdiffpatch`)
 - emit standard hpatch-compatible payloads (done through `node-hdiffpatch`)
 - validate with a file-level single-compressed hpatch apply path (done through
   `node-hdiffpatch.patchSingleStream`)
@@ -655,9 +671,10 @@ If new APIs are exposed to Node/Bun, they should come from crate-level stable fu
 
 The immediate next implementation step after this document is:
 
-1. Add corpus reporting that compares `hdiff_native`, `chiff_structured`, and
-   eventually `merged_costed` output. The first serialized-size report now
-   exists; it still needs broader corpus input and CI-friendly saved outputs.
+1. Expand corpus reporting for `hdiff_native`, `chiff_structured`,
+   `merged_costed`, approximate Hermes covers, and `native-coalesce`. The first
+   serialized-size report now exists; it still needs broader corpus input and
+   CI-friendly saved outputs.
 2. Continue Hermes/text algorithm work only after each optimization is classified
    as `OriginalByteCover` or `NativeOnly`.
 3. Start the native `chiff` container design separately, so native-only

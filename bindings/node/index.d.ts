@@ -15,6 +15,7 @@ export function selectEngineDecisionResult(oldInput: Uint8Array, newInput: Uint8
 export function structuredHermesSupport(input: Uint8Array): StructuredHermesSupportResult;
 export function analyzeDiffResult(oldInput: Uint8Array, newInput: Uint8Array): AnalyzeDiffResult;
 export function hpatchCompatiblePlanResult(oldInput: Uint8Array, newInput: Uint8Array): HpatchCompatiblePlanResult;
+export function hpatchApproximatePlanResult(oldInput: Uint8Array, newInput: Uint8Array): HpatchCompatiblePlanResult;
 export function analyzeDirectoryPairResult(oldRoot: string, newRoot: string): DirectoryAnalysisResult;
 
 export type DiffStatsResult = {
@@ -123,7 +124,11 @@ export type HpatchCoverResult = {
 
 export type HpatchCompatiblePlanResult = {
   outputMode: 'hpatch_compatible';
-  coverPolicy: 'chiff_structured' | 'hdiff_native' | 'merged_costed';
+  coverPolicy:
+    | 'chiff_structured'
+    | 'chiff_approximate'
+    | 'hdiff_native'
+    | 'merged_costed';
   oldSize: string;
   newSize: string;
   coverCount: number;
