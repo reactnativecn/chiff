@@ -93,6 +93,70 @@ fn hermes_small_function_bytes(function_bodies: &[&[u8]]) -> Vec<u8> {
     bytes
 }
 
+fn hermes_small_uint_switch_function_bytes(instruction: [u8; 18], jump_table: &[u32]) -> Vec<u8> {
+    let header_len = 128usize;
+    let function_headers_len = 12usize;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_size = instruction.len();
+    let jump_table_offset = align4(bytecode_start + bytecode_size);
+    let jump_table_size = jump_table.len() * 4;
+    let debug_info_offset = jump_table_offset + jump_table_size;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = vec![0; file_length];
+    bytes[0..8].copy_from_slice(&HERMES_MAGIC.to_le_bytes());
+    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[40..44].copy_from_slice(&1u32.to_le_bytes());
+    bytes[108..112].copy_from_slice(&(debug_info_offset as u32).to_le_bytes());
+
+    let header = small_function_header(bytecode_start as u32, bytecode_size as u32);
+    bytes[header_len..header_len + 12].copy_from_slice(&header);
+    bytes[bytecode_start..bytecode_start + bytecode_size].copy_from_slice(&instruction);
+
+    for (index, entry) in jump_table.iter().enumerate() {
+        let offset = jump_table_offset + index * 4;
+        bytes[offset..offset + 4].copy_from_slice(&entry.to_le_bytes());
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xED);
+    bytes
+}
+
+fn hermes_small_string_switch_function_bytes(
+    instruction: [u8; 18],
+    jump_table: &[(u32, u32)],
+) -> Vec<u8> {
+    let header_len = 128usize;
+    let function_headers_len = 12usize;
+    let bytecode_start = header_len + function_headers_len;
+    let bytecode_size = instruction.len();
+    let jump_table_offset = align4(bytecode_start + bytecode_size);
+    let jump_table_size = jump_table.len() * 8;
+    let debug_info_offset = jump_table_offset + jump_table_size;
+    let file_length = debug_info_offset + 8;
+
+    let mut bytes = vec![0; file_length];
+    bytes[0..8].copy_from_slice(&HERMES_MAGIC.to_le_bytes());
+    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[40..44].copy_from_slice(&1u32.to_le_bytes());
+    bytes[108..112].copy_from_slice(&(debug_info_offset as u32).to_le_bytes());
+
+    let header = small_function_header(bytecode_start as u32, bytecode_size as u32);
+    bytes[header_len..header_len + 12].copy_from_slice(&header);
+    bytes[bytecode_start..bytecode_start + bytecode_size].copy_from_slice(&instruction);
+
+    for (index, (string_id, jump_target)) in jump_table.iter().enumerate() {
+        let offset = jump_table_offset + index * 8;
+        bytes[offset..offset + 4].copy_from_slice(&string_id.to_le_bytes());
+        bytes[offset + 4..offset + 8].copy_from_slice(&jump_target.to_le_bytes());
+    }
+
+    bytes[debug_info_offset..file_length].fill(0xEA);
+    bytes
+}
+
 fn hermes_small_function_bytes_with_info(
     function_bodies: &[&[u8]],
     exception_handler_counts: &[Option<u32>],
@@ -291,6 +355,73 @@ fn hermes_overflow_function_bytes_with_info(
     bytes
 }
 
+fn append_signed_leb128(output: &mut Vec<u8>, mut value: i64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+
+        let done = (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0);
+        if done {
+            output.push(byte);
+            break;
+        }
+
+        output.push(byte | 0x80);
+    }
+}
+
+fn signed_leb128_bytes(values: &[i64]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for value in values {
+        append_signed_leb128(&mut bytes, *value);
+    }
+    bytes
+}
+
+fn hermes_bytes_with_debug_info(filename_storage: &[u8], debug_data: &[u8]) -> Vec<u8> {
+    const DEBUG_INFO_OFFSET: usize = 128;
+    const DEBUG_INFO_HEADER_LEN: usize = 16;
+    const FILENAME_TABLE_LEN: usize = 8;
+    const FILE_REGION_LEN: usize = 12;
+    const FOOTER_LEN: usize = 20;
+
+    let file_length = DEBUG_INFO_OFFSET
+        + DEBUG_INFO_HEADER_LEN
+        + FILENAME_TABLE_LEN
+        + filename_storage.len()
+        + FILE_REGION_LEN
+        + debug_data.len()
+        + FOOTER_LEN;
+    let mut bytes = vec![0; file_length];
+    bytes[0..8].copy_from_slice(&HERMES_MAGIC.to_le_bytes());
+    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&(file_length as u32).to_le_bytes());
+    bytes[108..112].copy_from_slice(&(DEBUG_INFO_OFFSET as u32).to_le_bytes());
+
+    let mut cursor = DEBUG_INFO_OFFSET;
+    bytes[cursor..cursor + 4].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&(filename_storage.len() as u32).to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[cursor + 12..cursor + 16].copy_from_slice(&(debug_data.len() as u32).to_le_bytes());
+    cursor += DEBUG_INFO_HEADER_LEN;
+
+    bytes[cursor..cursor + 4].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&(filename_storage.len() as u32).to_le_bytes());
+    cursor += FILENAME_TABLE_LEN;
+
+    bytes[cursor..cursor + filename_storage.len()].copy_from_slice(filename_storage);
+    cursor += filename_storage.len();
+
+    bytes[cursor..cursor + 4].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 4..cursor + 8].copy_from_slice(&0u32.to_le_bytes());
+    bytes[cursor + 8..cursor + 12].copy_from_slice(&0u32.to_le_bytes());
+    cursor += FILE_REGION_LEN;
+
+    bytes[cursor..cursor + debug_data.len()].copy_from_slice(debug_data);
+    bytes[file_length - FOOTER_LEN..file_length].fill(0xE9);
+    bytes
+}
+
 fn bench_diff_text(c: &mut Criterion) {
     let old = "const value = 41;\n".repeat(512);
     let mut new = old.clone();
@@ -333,6 +464,40 @@ fn bench_diff_hermes_small(c: &mut Criterion) {
     let new_instruction = hermes_small_function_bytes(&[&[5, 0x11, 5, 0x20, 5, 0x31]]);
     c.bench_function("diff/hermes-small-instruction-split", |b| {
         b.iter(|| diff_bytes(black_box(&old_instruction), black_box(&new_instruction)))
+    });
+
+    let mut old_switch = [0_u8; 18];
+    old_switch[0] = 167;
+    old_switch[1] = 1;
+    old_switch[2..6].copy_from_slice(&18_u32.to_le_bytes());
+    old_switch[6..10].copy_from_slice(&4_i32.to_le_bytes());
+    old_switch[10..14].copy_from_slice(&7_u32.to_le_bytes());
+    old_switch[14..18].copy_from_slice(&7_u32.to_le_bytes());
+    let mut new_switch = old_switch;
+    new_switch[1] = 2;
+    new_switch[6..10].copy_from_slice(&8_i32.to_le_bytes());
+    let old_switch = hermes_small_uint_switch_function_bytes(old_switch, &[0x1234_5678]);
+    let new_switch = hermes_small_uint_switch_function_bytes(new_switch, &[0x1234_5678]);
+    c.bench_function("diff/hermes-small-switch-tail", |b| {
+        b.iter(|| diff_bytes(black_box(&old_switch), black_box(&new_switch)))
+    });
+
+    let mut old_string_switch = [0_u8; 18];
+    old_string_switch[0] = 168;
+    old_string_switch[1] = 1;
+    old_string_switch[2..6].copy_from_slice(&7_u32.to_le_bytes());
+    old_string_switch[6..10].copy_from_slice(&18_u32.to_le_bytes());
+    old_string_switch[10..14].copy_from_slice(&4_i32.to_le_bytes());
+    old_string_switch[14..18].copy_from_slice(&1_u32.to_le_bytes());
+    let mut new_string_switch = old_string_switch;
+    new_string_switch[1] = 2;
+    new_string_switch[10..14].copy_from_slice(&8_i32.to_le_bytes());
+    let old_string_switch =
+        hermes_small_string_switch_function_bytes(old_string_switch, &[(11, 0x1234_5678)]);
+    let new_string_switch =
+        hermes_small_string_switch_function_bytes(new_string_switch, &[(11, 0x1234_5678)]);
+    c.bench_function("diff/hermes-small-string-switch-tail", |b| {
+        b.iter(|| diff_bytes(black_box(&old_string_switch), black_box(&new_string_switch)))
     });
 }
 
@@ -378,11 +543,23 @@ fn bench_diff_hermes_small_info(c: &mut Criterion) {
     });
 }
 
+fn bench_diff_hermes_debug_stream(c: &mut Criterion) {
+    let old =
+        hermes_bytes_with_debug_info(b"app\0", &signed_leb128_bytes(&[7, 10, 3, 0, 0, 1, 5, -1]));
+    let new =
+        hermes_bytes_with_debug_info(b"app\0", &signed_leb128_bytes(&[7, 130, 3, 0, 0, 1, 5, -1]));
+
+    c.bench_function("diff/hermes-debug-stream-varint-shift", |b| {
+        b.iter(|| diff_bytes(black_box(&old), black_box(&new)))
+    });
+}
+
 fn benchmark_diff_cases(c: &mut Criterion) {
     bench_diff_text(c);
     bench_diff_hermes_small(c);
     bench_diff_hermes_overflow_info(c);
     bench_diff_hermes_small_info(c);
+    bench_diff_hermes_debug_stream(c);
 }
 
 criterion_group!(benches, benchmark_diff_cases);

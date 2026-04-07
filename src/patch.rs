@@ -110,7 +110,8 @@ pub fn analyze_diff(old: &[u8], new: &[u8]) -> DiffAnalysis {
             diff_hermes_bytes(old, new).unwrap_or_else(|| diff_generic_bytes(old, new))
         }
         EngineKind::Text | EngineKind::GenericBinary => diff_generic_bytes(old, new),
-    };
+    }
+    .normalized();
     let stats = patch.stats();
 
     DiffAnalysis {
@@ -123,6 +124,16 @@ pub fn analyze_diff(old: &[u8], new: &[u8]) -> DiffAnalysis {
 }
 
 impl Patch {
+    pub fn normalized(self) -> Self {
+        let mut normalized_ops = Vec::with_capacity(self.ops.len());
+        for op in self.ops {
+            push_op(&mut normalized_ops, op);
+        }
+        Self {
+            ops: normalized_ops,
+        }
+    }
+
     pub fn stats(&self) -> PatchStats {
         let mut stats = PatchStats {
             op_count: self.ops.len(),
@@ -249,7 +260,8 @@ fn diff_hermes_bytes(old: &[u8], new: &[u8]) -> Option<Patch> {
             ) {
                 (Some(old_body), Some(new_body)) => {
                     let structured_ops = build_function_body_diff(old, new, &old_body, &new_body);
-                    let coarse_ops = build_region_diff(old, new, old_range.clone(), new_range.clone());
+                    let coarse_ops =
+                        build_region_diff(old, new, old_range.clone(), new_range.clone());
                     let structured_stats = Patch {
                         ops: structured_ops.clone(),
                     }
@@ -561,16 +573,77 @@ fn append_debug_data_diff(
         let old_stream = old_streams_by_function
             .get_mut(&stream.function_index)
             .and_then(VecDeque::pop_front);
+        match old_stream {
+            Some(old_stream) if !old_stream.segments.is_empty() && !stream.segments.is_empty() => {
+                let structured_ops = build_debug_stream_diff(old, new, old_stream, stream);
+                let coarse_ops = build_region_diff(
+                    old,
+                    new,
+                    old_stream.offset as usize..old_stream.end_offset as usize,
+                    stream.offset as usize..stream.end_offset as usize,
+                );
+                let structured_stats = Patch {
+                    ops: structured_ops.clone(),
+                }
+                .stats();
+                let coarse_stats = Patch {
+                    ops: coarse_ops.clone(),
+                }
+                .stats();
+
+                if structured_stats.inserted_bytes < coarse_stats.inserted_bytes
+                    || (structured_stats.inserted_bytes == coarse_stats.inserted_bytes
+                        && structured_stats.op_count < coarse_stats.op_count)
+                {
+                    ops.extend(structured_ops);
+                } else {
+                    ops.extend(coarse_ops);
+                }
+            }
+            Some(old_stream) => append_region_diff(
+                ops,
+                old,
+                new,
+                old_stream.offset as usize..old_stream.end_offset as usize,
+                stream.offset as usize..stream.end_offset as usize,
+            ),
+            None => append_region_diff(
+                ops,
+                old,
+                new,
+                0..0,
+                stream.offset as usize..stream.end_offset as usize,
+            ),
+        }
+    }
+}
+
+fn build_debug_stream_diff(
+    old: &[u8],
+    new: &[u8],
+    old_stream: &HermesDebugDataStream,
+    new_stream: &HermesDebugDataStream,
+) -> Vec<PatchOp> {
+    let mut ops = Vec::new();
+    let segment_count = old_stream.segments.len().max(new_stream.segments.len());
+    for index in 0..segment_count {
         append_region_diff(
-            ops,
+            &mut ops,
             old,
             new,
             old_stream
-                .map(|candidate| candidate.offset as usize..candidate.end_offset as usize)
+                .segments
+                .get(index)
+                .map(|range| range.start as usize..range.end as usize)
                 .unwrap_or(0..0),
-            stream.offset as usize..stream.end_offset as usize,
+            new_stream
+                .segments
+                .get(index)
+                .map(|range| range.start as usize..range.end as usize)
+                .unwrap_or(0..0),
         );
     }
+    ops
 }
 
 #[derive(Debug, Clone)]
@@ -1042,7 +1115,7 @@ fn sampled_starts(len: usize, step: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{middle_anchor_step, sampled_starts};
+    use super::{middle_anchor_step, sampled_starts, Patch, PatchOp};
 
     #[test]
     fn middle_anchor_uses_full_scan_for_small_regions() {
@@ -1064,5 +1137,41 @@ mod tests {
     #[test]
     fn sampled_starts_include_region_end() {
         assert_eq!(sampled_starts(20, 7), vec![0, 7, 14, 16]);
+    }
+
+    #[test]
+    fn patch_normalized_merges_adjacent_copy_ops() {
+        let patch = Patch {
+            ops: vec![
+                PatchOp::Copy { offset: 10, len: 4 },
+                PatchOp::Copy { offset: 14, len: 6 },
+            ],
+        }
+        .normalized();
+
+        assert_eq!(
+            patch,
+            Patch {
+                ops: vec![PatchOp::Copy {
+                    offset: 10,
+                    len: 10
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn patch_normalized_merges_adjacent_insert_ops() {
+        let patch = Patch {
+            ops: vec![PatchOp::Insert(vec![1, 2]), PatchOp::Insert(vec![3, 4])],
+        }
+        .normalized();
+
+        assert_eq!(
+            patch,
+            Patch {
+                ops: vec![PatchOp::Insert(vec![1, 2, 3, 4])],
+            }
+        );
     }
 }

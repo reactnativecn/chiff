@@ -6,7 +6,7 @@
   },
   "expected_totals": {
     "paired": 7,
-    "copy_ops": 4658,
+    "copy_ops": 18,
     "insert_ops": 17,
     "copied_bytes": 4791603,
     "inserted_bytes": 113

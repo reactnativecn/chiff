@@ -325,12 +325,17 @@ However, it still does not parse the internal meaning of those subregions, for e
 - specific debug-offset fields
 - future metadata payload variants if Hermes changes the info layout
 
-### 2. Opcode-aware diff is not implemented
+### 2. Opcode-aware diff is still shallow
 
 Within a function body, `chiff` now has a shallow instruction-level split for
-Hermes 98/99 using embedded opcode sizes, but it still does not understand:
+Hermes 98/99 using embedded opcode sizes. It can preserve:
 
 - instruction boundaries
+- `UIntSwitchImm` jump-table tails
+- `StringSwitchImm` jump-table tails
+
+However, it still does not understand:
+
 - operand semantics beyond switch-table tail extraction
 - operand classes
 - Hermes delta-relative operand normalization
@@ -339,18 +344,20 @@ The current implementation is deliberately conservative:
 
 - if bytecode decoding fails, body diff falls back to the coarse per-function region strategy
 - switch tables are segmented structurally, but instruction operands are still compared as raw bytes
-- real-corpus runs currently show stable `inserted_bytes`, but `copy_op_count` can rise sharply, so op coalescing or selection heuristics remain future work
+- final patch output is normalized globally, so adjacent `Copy` / `Insert` ops are coalesced before stats are reported or bindings consume the patch
 
 ### 3. Debug-info semantics are still coarse
 
-`chiff` now parses the top-level `debug_info` layout and function debug-data stream boundaries.
-However, it still does not parse the internal semantics of:
+`chiff` now parses the top-level `debug_info` layout, function debug-data stream
+boundaries, and SLEB128 unit boundaries inside each stream. However, it still
+does not parse the internal semantics of:
 
 - filename table entries
 - file-region mappings beyond raw entries
 - individual source-location records within a debug-data stream
 
-That means stream-level preservation is good, but intra-stream optimization is still generic.
+That means stream-level preservation is now finer-grained than before, but
+intra-stream optimization is still only unit-aware rather than record-aware.
 
 ### 4. Text diff is still conservative
 

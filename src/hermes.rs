@@ -189,6 +189,7 @@ pub struct HermesDebugDataStream {
     pub function_index: u32,
     pub offset: u32,
     pub end_offset: u32,
+    pub segments: Vec<std::ops::Range<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -705,30 +706,48 @@ fn parse_debug_data_streams(
 
     while relative_offset < debug_data.len() {
         let stream_start = relative_offset;
-        let function_index = read_signed_leb128(debug_data, &mut relative_offset)?;
+        let mut segments = Vec::new();
+
+        let (function_index, function_index_range) =
+            read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+        segments.push(to_absolute_u32_range(
+            debug_data_offset,
+            function_index_range,
+        )?);
         let function_index = u32::try_from(function_index).ok()?;
 
-        read_signed_leb128(debug_data, &mut relative_offset)?;
-        read_signed_leb128(debug_data, &mut relative_offset)?;
-        read_signed_leb128(debug_data, &mut relative_offset)?;
+        for _ in 0..3 {
+            let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+            segments.push(to_absolute_u32_range(debug_data_offset, range)?);
+        }
 
         loop {
-            let address_delta = read_signed_leb128(debug_data, &mut relative_offset)?;
+            let (address_delta, address_delta_range) =
+                read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+            segments.push(to_absolute_u32_range(
+                debug_data_offset,
+                address_delta_range,
+            )?);
             if address_delta == -1 {
                 break;
             }
 
-            let line_delta = read_signed_leb128(debug_data, &mut relative_offset)?;
+            let (line_delta, line_delta_range) =
+                read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+            segments.push(to_absolute_u32_range(debug_data_offset, line_delta_range)?);
             if (line_delta & 1) == 0 {
                 continue;
             }
 
-            read_signed_leb128(debug_data, &mut relative_offset)?;
+            let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+            segments.push(to_absolute_u32_range(debug_data_offset, range)?);
             if (line_delta & 2) != 0 {
-                read_signed_leb128(debug_data, &mut relative_offset)?;
+                let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+                segments.push(to_absolute_u32_range(debug_data_offset, range)?);
             }
             if (line_delta & 4) != 0 {
-                read_signed_leb128(debug_data, &mut relative_offset)?;
+                let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+                segments.push(to_absolute_u32_range(debug_data_offset, range)?);
             }
         }
 
@@ -738,6 +757,7 @@ fn parse_debug_data_streams(
             function_index,
             offset,
             end_offset,
+            segments,
         });
     }
 
@@ -961,6 +981,25 @@ fn read_signed_leb128(bytes: &[u8], offset: &mut usize) -> Option<i64> {
             return None;
         }
     }
+}
+
+fn read_signed_leb128_with_range(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Option<(i64, std::ops::Range<usize>)> {
+    let start = *offset;
+    let value = read_signed_leb128(bytes, offset)?;
+    Some((value, start..*offset))
+}
+
+fn to_absolute_u32_range(
+    base_offset: u32,
+    range: std::ops::Range<usize>,
+) -> Option<std::ops::Range<u32>> {
+    Some(
+        base_offset.checked_add(u32::try_from(range.start).ok()?)?
+            ..base_offset.checked_add(u32::try_from(range.end).ok()?)?,
+    )
 }
 
 fn decode_large_header_offset(word1: u32, word2: u32) -> u32 {
