@@ -37,6 +37,17 @@ The resulting artifacts were copied into:
 - `/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/text/index.android.bundle`
 - `/Users/sunny/Documents/workspace/chiff/fixtures/generated/testHotUpdate/android/hermes/index.android.hbc`
 
+Additional old/new pairs can be generated with:
+
+```bash
+node scripts/generate-testhotupdate-corpus.cjs --pair <name>
+```
+
+Current generated pairs:
+
+- `minor-string-edit`
+- `bundle-label-copy-edit`
+
 ## Notes
 
 - These fixtures intentionally exclude any speculative custom footer metadata.

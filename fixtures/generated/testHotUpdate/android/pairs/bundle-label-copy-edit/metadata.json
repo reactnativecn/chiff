@@ -1,0 +1,91 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "generated_by": "scripts/generate-testhotupdate-corpus.cjs",
+  "mutation": {
+    "name": "bundle-label-copy-edit",
+    "file": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate/src/index.tsx",
+    "line": 122,
+    "from": "<Text testID=\"bundle-label\">bundleLabel: {bundleLabel}</Text>",
+    "to": "<Text testID=\"bundle-label\">bundleLabelV2: {bundleLabel}</Text>"
+  },
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093752,
+      "sha256": "7ad07251efcee320a1c81d4d2a09f008dc5d2a6fb95cc7efcd76aaf309d71774"
+    },
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697512,
+      "sha256": "3d697191ddf2760b5a3eb356355a3eb12c07d53691d437c584c1258375194d3e"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697512,
+      "sha256": "068d04a5cf47513bacfc4ec82d2de6a75119aec350e7e76356cbe08eb129b3fb"
+    }
+  ],
+  "current_diff_stats": {
+    "text": {
+      "op_count": 15,
+      "copy_op_count": 8,
+      "insert_op_count": 7,
+      "copied_bytes": 2093744,
+      "inserted_bytes": 8
+    },
+    "hermes": {
+      "op_count": 75,
+      "copy_op_count": 39,
+      "insert_op_count": 36,
+      "copied_bytes": 2658597,
+      "inserted_bytes": 38915
+    }
+  },
+  "current_hpatch_policy_report": {
+    "text": {
+      "native_patch_bytes": 60,
+      "structured_patch_bytes": 63,
+      "selected_patch_bytes": 60,
+      "winner": "hdiff_native"
+    },
+    "hermes": {
+      "native_patch_bytes": 797,
+      "structured_patch_bytes": 17068,
+      "selected_patch_bytes": 797,
+      "winner": "hdiff_native",
+      "structured_plan_ms": 81548.543
+    },
+    "total": {
+      "native_patch_bytes": 857,
+      "structured_patch_bytes": 17131,
+      "selected_patch_bytes": 857,
+      "selected_delta_bytes": 0
+    }
+  }
+}

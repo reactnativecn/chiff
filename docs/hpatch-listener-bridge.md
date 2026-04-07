@@ -1,4 +1,4 @@
-# Hpatch Listener Bridge Plan
+# Hpatch Listener Bridge
 
 ## Integration Target
 
@@ -12,17 +12,17 @@ The lowest-risk hpatch-compatible integration point is the existing
   HDiffPatch's existing `sub_cover` and `serialize_single_compressed_diff`
   pipeline.
 - [src/hdiff.cpp](/Users/sunny/Documents/workspace/node-hdiffpatch/src/hdiff.cpp)
-  currently passes `0` for the listener, so all cover selection is done by
+  historically passed `0` for the listener, so all cover selection was done by
   HDiffPatch's raw-byte matcher.
 
 That means `chiff` can improve cover selection without changing the patch
 consumer. The generated payload still comes from HDiffPatch and should still
 apply with the existing `hpatch_by_file` runtime.
 
-There is one important implementation constraint in the current HDiffPatch hook:
-`diff.cpp` allocates the listener output buffer with the same size as
-HDiffPatch's native cover list, then asserts `coverCount <= _covers.size()`.
-So a listener cannot safely return more covers than the raw matcher already
+There was one important implementation constraint in the original HDiffPatch
+hook: `diff.cpp` allocated the listener output buffer with the same size as
+HDiffPatch's native cover list, then asserted `coverCount <= _covers.size()`.
+So a listener could not safely return more covers than the raw matcher already
 found unless we either:
 
 - coalesce or down-select `chiff` covers to fit the available capacity,
@@ -33,23 +33,50 @@ This constraint is a serializer integration detail, not a patch-side
 compatibility issue. Any of the options above can still emit a standard
 HDiffPatch-compatible payload.
 
+The local `node-hdiffpatch` bridge now uses the dynamic-cover option: listener
+implementations may set `coverCount` larger than the initial native capacity,
+HDiffPatch resizes the temporary cover buffer, and then calls the listener again
+to fill the larger list. The output is still serialized by HDiffPatch.
+
 ## Proposed Bridge
 
-Add a new generation path in `node-hdiffpatch`:
+The generation path in `node-hdiffpatch` is side-by-side with the existing
+path:
 
 1. Keep the current `hdiff(old, oldsize, new, newsize, out)` path unchanged.
-2. Add a second entry point, for example `hdiff_with_cover_listener(...)`.
-3. The new entry point calls `chiff` or receives a precomputed
-   `HpatchCompatiblePlan`.
-4. Convert `HpatchCompatiblePlan.covers` to `hpatch_TCover` records.
+2. Add `hdiff_with_covers(...)` and expose it to JavaScript as `diffWithCovers`.
+3. The caller passes a precomputed `HpatchCompatiblePlan` cover list from
+   `chiff` or another cover selector.
+4. Convert cover entries to `hpatch_TCover` records.
 5. Pass an `ICoverLinesListener` to `create_single_compressed_diff`.
 6. Let HDiffPatch continue running `sub_cover` and its standard serializer.
 7. Validate the result with `check_single_compressed_diff`, then with the
-   existing file-level `hpatch_by_file` path used by `react-native-update`.
+   file-level `patchSingleStream` path that applies the same single-compressed
+   hpatch payload family used by `react-native-update`.
 
-This should be implemented as a side-by-side mode first, not as a replacement.
-The first implementation may intentionally fall back to `hdiff_native` when
-`chiff` produces more covers than the current listener buffer can hold.
+The original `diff` API remains unchanged.
+
+## React Native Update Integration
+
+`react-native-update-cli` now keeps the existing `hdiff` and `hdiffFrom*`
+commands and wraps their hdiff implementation internally:
+
+1. Load `node-hdiffpatch` as before.
+2. Optionally load `@chiff/node`.
+3. If `RNU_CHIFF_HPATCH_POLICY=costed` is enabled and both `diffWithCovers` and
+   `hpatchCompatiblePlanResult` are available, generate `chiff` cover lines and
+   pass them to `diffWithCovers`. The wrapper also generates the native hdiff
+   payload and keeps the smaller of the two standard hpatch-compatible outputs.
+4. If the native hdiff payload is below `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`
+   (`4096` bytes by default), skip structured planning and keep native hdiff.
+5. If loading, cover generation, or `diffWithCovers` fails, fall back to the
+   original `node-hdiffpatch.diff`.
+
+With the default policy, the wrapper only calls native `node-hdiffpatch.diff`.
+
+This keeps the server task model unchanged. Existing `hdiff` and `phdiff`
+tasks still produce standard hpatch-compatible payloads, so the SDK/native
+patch side does not need to change.
 
 ## Policy
 
@@ -61,9 +88,10 @@ The compatible bridge should eventually support three policies:
   lower-cost result.
 
 The current `chiff` crate only implements the `chiff_structured` cover-plan
-export. Production default should not switch to that blindly. It should be
-chosen by corpus data because HDiffPatch's approximate raw-byte covers may beat
-`chiff`'s exact covers on some arbitrary binary inputs.
+export. Production default should not switch to that blindly. It is currently
+opt-in because HDiffPatch's approximate raw-byte covers may beat `chiff`'s exact
+covers on real Hermes inputs, and some structured planning paths are still too
+slow for server defaults.
 
 ## Compatibility Constraints
 

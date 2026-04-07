@@ -29,7 +29,7 @@ Today that also means the Hermes-aware path is intentionally conservative:
 The current surrounding ecosystem baseline is documented in [baselines.md](/Users/sunny/Documents/workspace/chiff/docs/baselines.md).
 The hpatch-compatible output boundary is documented in
 [hpatch-compatibility.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-compatibility.md).
-The planned HDiffPatch listener bridge is documented in
+The HDiffPatch listener bridge is documented in
 [hpatch-listener-bridge.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-listener-bridge.md).
 
 ## Non-goals
@@ -308,9 +308,10 @@ the final hpatch-compatible artifact must apply to the original old bytes and
 reconstruct the original new bytes with an unmodified HDiffPatch / hpatch applier.
 
 The first internal seam is `build_hpatch_compatible_plan`, which maps `chiff`'s
-current `Copy/Insert` IR into HDiffPatch cover coordinates. The next serializer
-step should use HDiffPatch's `ICoverLinesListener` or an equivalent Rust
-serializer, while preserving the same patch-side compatibility contract.
+current `Copy/Insert` IR into HDiffPatch cover coordinates. The current
+production-compatible serializer path is the `node-hdiffpatch.diffWithCovers`
+bridge, which feeds those covers into HDiffPatch's `ICoverLinesListener` while
+preserving the same patch-side compatibility contract.
 
 The cover-plan seam now also exposes a cost floor through
 `HpatchCompatiblePlan::stats`:
@@ -364,12 +365,22 @@ The following milestones are complete:
 - hpatch-compatible cover-plan export from the current exact `Copy/Insert` patch IR
 - hpatch-compatible cover-plan cost-floor stats
 - explicit output-mode and optimization-compatibility classification
+- `node-hdiffpatch.diffWithCovers` bridge that emits standard
+  hpatch-compatible payloads from `chiff` cover plans
+- `react-native-update-cli` hdiff wrapper that optionally uses the bridge
+  without adding server task types or changing the SDK patch side
+- costed CLI selection between native hdiff and `chiff`-cover hpatch payloads,
+  so an experimental cover plan does not enlarge the production artifact
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Criterion mixed-corpus benchmark harness covering real text/Hermes pairs plus generic-binary and Hermes fallback pairs
 - Rust crate verification
 - reusable Rust corpus aggregation API for fixtures, reports, and future benchmark tooling
+- Node/Bun hpatch policy report comparing native HDiffPatch payloads against
+  `chiff`-cover payloads with file-level single-compressed hpatch roundtrip
+  validation
 - Node and Bun smoke-test verification through one Node-API addon
-- real generated text/Hermes Android fixtures and one real old/new mutation pair from the `react-native-update` example app
+- real generated text/Hermes Android fixtures and two real old/new mutation
+  pairs from the `react-native-update` example app
 - synthetic fixture coverage for version mismatch, form mismatch, invalid header, unsupported version, and arbitrary binary fallback cases
 
 ## Current Limits
@@ -437,16 +448,31 @@ It now performs a conservative middle-anchor resync, but it still does not perfo
 - token-aware matching
 - multi-anchor / token-level re-synchronization
 
-### 5. Hpatch compatibility is not serialized yet
+### 5. Hpatch-compatible generation still needs policy selection
 
-`chiff` can now export hpatch cover-plan coordinates from its internal patch IR,
-but it does not yet emit a full HDiffPatch-compatible payload.
+`chiff` can export hpatch cover-plan coordinates from its internal patch IR, and
+`node-hdiffpatch.diffWithCovers` can serialize those plans into a standard
+HDiffPatch-compatible payload. `react-native-update-cli` can use that path inside
+the existing `hdiff` commands when both `@chiff/node` and the enhanced
+`node-hdiffpatch` are available. The current CLI integration is opt-in and
+costed: `RNU_CHIFF_HPATCH_POLICY=costed` generates native hdiff and
+`chiff`-cover hpatch payloads, then keeps the smaller payload. The default path
+still uses native hdiff only. Even in `costed` mode, the CLI skips structured
+planning when the native hdiff payload is below
+`RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`, which defaults to 4096 bytes.
 
 The compatibility path still needs:
 
-- a serializer backend or HDiffPatch `ICoverLinesListener` bridge
-- a cover policy that compares `chiff` covers against hdiff-native covers
-- validation through the existing `hpatch_by_file` apply path
+- broader corpus reports before making `chiff_structured` the unconditional
+  default
+- a future `merged_costed` policy that can combine hdiff-native covers and
+  `chiff` covers instead of choosing between two serialized payloads
+- a faster hpatch-compatible planner, because the `bundle-label-copy-edit` real
+  Hermes pair currently spends about 81.5s in `chiff_structured` planning and
+  still serializes much larger than native hdiff
+- threshold tuning for `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES` across a larger
+  corpus, because small native hdiff patches have little room for meaningful
+  structured-cover wins
 
 The theoretical advantage over plain hdiff is cover selection, not container
 format. On arbitrary binary data, plain hdiff may still produce better covers.
@@ -470,6 +496,8 @@ We now have both:
 
 - a synthetic Criterion harness for focused text/Hermes micro-cases
 - a mixed-corpus Criterion harness over real and synthetic regression fixtures
+- a Node/Bun hpatch-compatible policy report that compares serialized native
+  hdiff and `chiff`-cover payload sizes
 
 However, we still do not have a broader corpus-driven benchmark suite that records:
 
@@ -547,10 +575,17 @@ Add:
 
 For existing `react-native-update` clients:
 
-- feed `chiff` cover plans into HDiffPatch `ICoverLinesListener`
-- compare `chiff` covers, hdiff-native covers, and merged-costed covers
-- emit standard hpatch-compatible payloads
-- validate with the existing `hpatch_by_file` apply path
+- feed `chiff` cover plans into HDiffPatch `ICoverLinesListener` through
+  `node-hdiffpatch.diffWithCovers` (done)
+- keep existing server task types (`hdiff`, `hdiffFrom*`, `phdiff`) and SDK
+  hpatch apply code unchanged (done)
+- compare native hdiff and `chiff`-cover serialized payloads and keep the
+  smaller one in `react-native-update-cli` (done)
+- compare `chiff` covers, hdiff-native covers, and merged-costed covers at the
+  cover-policy level
+- emit standard hpatch-compatible payloads (done through `node-hdiffpatch`)
+- validate with a file-level single-compressed hpatch apply path (done through
+  `node-hdiffpatch.patchSingleStream`)
 
 ### Stage 8: Native `chiff` format
 
@@ -620,21 +655,17 @@ If new APIs are exposed to Node/Bun, they should come from crate-level stable fu
 
 The immediate next implementation step after this document is:
 
-1. Add the HDiffPatch listener bridge in `node-hdiffpatch` as a side-by-side
-   generation path, not a replacement for the current hdiff path.
-2. Validate generated hpatch-compatible payloads with
-   `check_single_compressed_diff` and the existing file-level `hpatch_by_file`
-   path.
-3. Add corpus reporting that compares `hdiff_native`, `chiff_structured`, and
-   eventually `merged_costed` output.
-4. Continue Hermes/text algorithm work only after each optimization is classified
+1. Add corpus reporting that compares `hdiff_native`, `chiff_structured`, and
+   eventually `merged_costed` output. The first serialized-size report now
+   exists; it still needs broader corpus input and CI-friendly saved outputs.
+2. Continue Hermes/text algorithm work only after each optimization is classified
    as `OriginalByteCover` or `NativeOnly`.
-5. Start the native `chiff` container design separately, so native-only
+3. Start the native `chiff` container design separately, so native-only
    transforms can pursue the upper bound without weakening hpatch compatibility.
 
 After that, the most valuable branch point is:
 
-- hpatch-compatible bridge implementation in `node-hdiffpatch`, or
+- cover-policy selection for the hpatch-compatible bridge, or
 - native `chiff` container MVP
 
 That choice should be driven by real patch-size, diff-time, apply-time, and
