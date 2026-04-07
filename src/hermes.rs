@@ -188,6 +188,11 @@ pub struct HermesDebugFileRegion {
 pub struct HermesDebugDataRecord {
     pub offset: u32,
     pub end_offset: u32,
+    pub address: i64,
+    pub line: Option<i64>,
+    pub column: Option<i64>,
+    pub statement: Option<i64>,
+    pub env_idx: Option<i64>,
     pub address_delta: std::ops::Range<u32>,
     pub line_delta: std::ops::Range<u32>,
     pub column_delta: Option<std::ops::Range<u32>>,
@@ -732,12 +737,26 @@ fn parse_debug_data_streams(
         segments.push(function_index_range);
         let function_index = u32::try_from(function_index).ok()?;
 
-        for _ in 0..3 {
-            let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-            let range = to_absolute_u32_range(debug_data_offset, range)?;
-            header_segments.push(range.clone());
-            segments.push(range);
-        }
+        let (mut current_line, range) =
+            read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+        let range = to_absolute_u32_range(debug_data_offset, range)?;
+        header_segments.push(range.clone());
+        segments.push(range);
+
+        let (mut current_column, range) =
+            read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+        let range = to_absolute_u32_range(debug_data_offset, range)?;
+        header_segments.push(range.clone());
+        segments.push(range);
+
+        let (mut current_env_idx, range) =
+            read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+        let range = to_absolute_u32_range(debug_data_offset, range)?;
+        header_segments.push(range.clone());
+        segments.push(range);
+
+        let mut current_address = 0i64;
+        let mut current_statement = 0i64;
 
         let terminal = loop {
             let record_start = relative_offset;
@@ -752,6 +771,7 @@ fn parse_debug_data_streams(
             if address_delta == -1 {
                 break to_absolute_u32_range(debug_data_offset, record_start..relative_offset)?;
             }
+            current_address = current_address.checked_add(address_delta)?;
 
             let (line_delta, line_delta_range) =
                 read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
@@ -765,6 +785,11 @@ fn parse_debug_data_streams(
                 records.push(HermesDebugDataRecord {
                     offset,
                     end_offset,
+                    address: current_address,
+                    line: None,
+                    column: None,
+                    statement: None,
+                    env_idx: None,
                     address_delta: record_segments[0].clone(),
                     line_delta: record_segments[1].clone(),
                     column_delta: None,
@@ -775,33 +800,50 @@ fn parse_debug_data_streams(
                 continue;
             }
 
-            let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+            let (column_delta_value, range) =
+                read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
             let range = to_absolute_u32_range(debug_data_offset, range)?;
             let column_delta = range.clone();
             record_segments.push(range.clone());
             segments.push(range);
             let mut statement_delta = None;
+            let mut statement_delta_value = 0i64;
             if (line_delta & 2) != 0 {
-                let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+                let (delta, range) =
+                    read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
                 let range = to_absolute_u32_range(debug_data_offset, range)?;
+                statement_delta_value = delta;
                 statement_delta = Some(range.clone());
                 record_segments.push(range.clone());
                 segments.push(range);
             }
             let mut env_idx_delta = None;
+            let mut env_idx_delta_value = 0i64;
             if (line_delta & 4) != 0 {
-                let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
+                let (delta, range) =
+                    read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
                 let range = to_absolute_u32_range(debug_data_offset, range)?;
+                env_idx_delta_value = delta;
                 env_idx_delta = Some(range.clone());
                 record_segments.push(range.clone());
                 segments.push(range);
             }
+
+            current_line = current_line.checked_add(line_delta >> 3)?;
+            current_column = current_column.checked_add(column_delta_value)?;
+            current_statement = current_statement.checked_add(statement_delta_value)?;
+            current_env_idx = current_env_idx.checked_add(env_idx_delta_value)?;
 
             let offset = debug_data_offset.checked_add(u32::try_from(record_start).ok()?)?;
             let end_offset = debug_data_offset.checked_add(u32::try_from(relative_offset).ok()?)?;
             records.push(HermesDebugDataRecord {
                 offset,
                 end_offset,
+                address: current_address,
+                line: Some(current_line),
+                column: Some(current_column),
+                statement: Some(current_statement),
+                env_idx: Some(current_env_idx),
                 address_delta: record_segments[0].clone(),
                 line_delta: record_segments[1].clone(),
                 column_delta: Some(column_delta),

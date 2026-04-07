@@ -576,6 +576,18 @@ fn bench_diff_hermes_debug_stream(c: &mut Criterion) {
     c.bench_function("diff/hermes-debug-stream-record-field", |b| {
         b.iter(|| diff_bytes(black_box(&old_field), black_box(&new_field)))
     });
+
+    let old_semantic = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 5, 1, 10, 5, 1, 20, -1]),
+    );
+    let new_semantic = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 1, 0, 4, 1, 10, 5, 1, 20, -1]),
+    );
+    c.bench_function("diff/hermes-debug-stream-record-semantic-anchor", |b| {
+        b.iter(|| diff_bytes(black_box(&old_semantic), black_box(&new_semantic)))
+    });
 }
 
 fn benchmark_diff_cases(c: &mut Criterion) {

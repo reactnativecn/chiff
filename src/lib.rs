@@ -3,6 +3,8 @@ pub mod engine;
 pub mod format;
 pub mod hermes;
 mod hermes_opcodes;
+pub mod hpatch;
+pub mod output;
 pub mod patch;
 
 pub use corpus::{
@@ -18,6 +20,11 @@ pub use hermes::{
     HermesFunctionLayout, HermesHeader, HermesSection, HermesSectionKind, HermesSectionLayout,
     StructuredHermesSupport, SUPPORTED_STRUCTURED_HERMES_VERSIONS,
 };
+pub use hpatch::{
+    build_hpatch_compatible_plan, HpatchCompatiblePlan, HpatchCompatiblePlanError,
+    HpatchCompatiblePlanStats, HpatchCover, HpatchCoverSelectionPolicy,
+};
+pub use output::{OptimizationCompatibility, PatchOutputMode};
 pub use patch::{
     analyze_diff, apply_patch, diff_bytes, DiffAnalysis, Patch, PatchError, PatchOp, PatchStats,
 };

@@ -91,6 +91,25 @@ assert.deepEqual(
     insertedBytes: 3,
   },
 );
+assert.deepEqual(
+  chiff.hpatchCompatiblePlanResult(
+    Buffer.from('abcXYZdef'),
+    Buffer.from('abc123def'),
+  ),
+  {
+    outputMode: 'hpatch_compatible',
+    coverPolicy: 'chiff_structured',
+    oldSize: '9',
+    newSize: '9',
+    coverCount: 2,
+    coveredBytes: '6',
+    uncoveredNewBytes: '3',
+    covers: [
+      { oldPos: '0', newPos: '0', len: '3' },
+      { oldPos: '6', newPos: '6', len: '3' },
+    ],
+  },
+);
 assert.deepEqual(chiff.structuredHermesSupport(hermesHeaderBytes(99)), {
   status: 'supported',
   version: 99,

@@ -1005,6 +1005,29 @@ fn diff_bytes_preserves_debug_record_env_field_when_statement_field_is_inserted(
 }
 
 #[test]
+fn diff_bytes_uses_debug_record_semantics_to_resynchronize_after_no_location_record() {
+    let old = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 5, 1, 10, 5, 1, 20, -1]),
+    );
+    let new = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 1, 0, 4, 1, 10, 5, 1, 20, -1]),
+    );
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 174 && offset.saturating_add(*len) >= 175
+        )
+    }));
+}
+
+#[test]
 fn diff_bytes_preserves_common_prefix_and_suffix() {
     let old = b"abcXYZdef";
     let new = b"abc123def";

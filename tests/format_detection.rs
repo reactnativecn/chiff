@@ -942,6 +942,11 @@ fn parses_hermes_debug_info_layout_and_streams() {
                     records: vec![HermesDebugDataRecord {
                         offset: 172,
                         end_offset: 175,
+                        address: 0,
+                        line: Some(10),
+                        column: Some(3),
+                        statement: Some(0),
+                        env_idx: Some(0),
                         address_delta: 172..173,
                         line_delta: 173..174,
                         column_delta: Some(174..175),
@@ -969,6 +974,11 @@ fn parses_hermes_debug_info_layout_and_streams() {
                     records: vec![HermesDebugDataRecord {
                         offset: 180,
                         end_offset: 183,
+                        address: 2,
+                        line: Some(20),
+                        column: Some(5),
+                        statement: Some(0),
+                        env_idx: Some(0),
                         address_delta: 180..181,
                         line_delta: 181..182,
                         column_delta: Some(182..183),

@@ -853,7 +853,7 @@ fn find_debug_record_anchor(
 
     for (old_index, old_record) in old_records.iter().enumerate() {
         for (new_index, new_record) in new_records.iter().enumerate() {
-            if !debug_record_bytes_equal(old, new, old_record, new_record) {
+            if !debug_record_anchor_matches(old, new, old_record, new_record) {
                 continue;
             }
             let len = old_record.end_offset.saturating_sub(old_record.offset) as usize;
@@ -865,6 +865,20 @@ fn find_debug_record_anchor(
     }
 
     best
+}
+
+fn debug_record_anchor_matches(
+    old: &[u8],
+    new: &[u8],
+    old_record: &HermesDebugDataRecord,
+    new_record: &HermesDebugDataRecord,
+) -> bool {
+    debug_record_bytes_equal(old, new, old_record, new_record)
+        || (old_record.address == new_record.address
+            && old_record.line == new_record.line
+            && old_record.column == new_record.column
+            && old_record.statement == new_record.statement
+            && old_record.env_idx == new_record.env_idx)
 }
 
 fn debug_record_bytes_equal(

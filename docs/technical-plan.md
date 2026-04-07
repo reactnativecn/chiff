@@ -14,6 +14,10 @@ The goal is to build a format-aware diff engine that:
 - falls back safely to generic byte diff when structure cannot be trusted
 - distinguishes explicit generic-binary cases from true mixed-format cases
 - remains easy to bind into Node and Bun through one shared native addon
+- can optionally emit hpatch-compatible artifacts so existing patch clients do
+  not need to change
+- can also support an opt-in native format lane for maximum Hermes-aware
+  compression when patch clients are allowed to change
 
 Today that also means the Hermes-aware path is intentionally conservative:
 
@@ -23,12 +27,16 @@ Today that also means the Hermes-aware path is intentionally conservative:
 - engine selection and Hermes compatibility are exposed as reason/status codes, not just booleans
 
 The current surrounding ecosystem baseline is documented in [baselines.md](/Users/sunny/Documents/workspace/chiff/docs/baselines.md).
+The hpatch-compatible output boundary is documented in
+[hpatch-compatibility.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-compatibility.md).
+The planned HDiffPatch listener bridge is documented in
+[hpatch-listener-bridge.md](/Users/sunny/Documents/workspace/chiff/docs/hpatch-listener-bridge.md).
 
 ## Non-goals
 
 The current phase explicitly does not try to do the following:
 
-- invent a brand-new patch container format
+- require a brand-new patch container format for the default compatibility path
 - replace every mature binary diff implementation in all workloads
 - support speculative footer metadata that is not actually present in current bundles
 - fully reconstruct Hermes VM-level semantics from bytecode instructions
@@ -88,6 +96,8 @@ Bindings should only expose stable library APIs.
 - [src/engine.rs](/Users/sunny/Documents/workspace/chiff/src/engine.rs): engine selection
 - [src/hermes.rs](/Users/sunny/Documents/workspace/chiff/src/hermes.rs): Hermes structural parsing
 - [src/patch.rs](/Users/sunny/Documents/workspace/chiff/src/patch.rs): patch IR, apply, and diff logic
+- [src/output.rs](/Users/sunny/Documents/workspace/chiff/src/output.rs): output-lane and optimization-compatibility classification
+- [src/hpatch.rs](/Users/sunny/Documents/workspace/chiff/src/hpatch.rs): hpatch-compatible cover-plan boundary
 - [benches/diff_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/diff_cases.rs): synthetic benchmark harness for diff/apply cases
 - [benches/corpus_cases.rs](/Users/sunny/Documents/workspace/chiff/benches/corpus_cases.rs): Criterion harness for real mixed-corpus diff/apply cases
 - [examples/diff_stats.rs](/Users/sunny/Documents/workspace/chiff/examples/diff_stats.rs): quick CLI-style inspection for format detection and patch stats
@@ -107,6 +117,9 @@ Bindings should only expose stable library APIs.
 - unified diff analysis via `analyze_diff`
 - directory-pair corpus analysis via `analyze_directory_pair`
 - Node/Bun directory-pair corpus analysis via `analyzeDirectoryPairResult`
+- Node/Bun hpatch cover-plan diagnostics via `hpatchCompatiblePlanResult`
+- explicit output-lane classification via `PatchOutputMode`
+- optimization lane gating via `OptimizationCompatibility`
 - structured Hermes compatibility helpers:
   - `assess_structured_hermes`
   - `supports_structured_hermes_version`
@@ -115,12 +128,23 @@ Bindings should only expose stable library APIs.
 - Hermes section layout parsing
 - Hermes function layout parsing
 - patch statistics via `PatchStats`
+- a first hpatch-compatible cover-plan boundary via `build_hpatch_compatible_plan`
+- hpatch-compatible cover-quality floor stats via `HpatchCompatiblePlan::stats`
 - minimal patch IR:
   - `Copy { offset, len }`
   - `Insert(bytes)`
 
 This IR is intentionally small for the current phase.
 It is enough to validate structural diff behavior before introducing more advanced operations.
+
+For hpatch-compatible output, this IR must remain convertible to original-file
+cover coordinates. Future semantic algorithms may use normalized internal views
+to choose matches, but emitted covers must still point to original old/new byte
+positions.
+
+For the future native `chiff` format, this restriction can be relaxed, but only
+behind an explicit output mode. Native-only optimizations must not silently leak
+into the hpatch-compatible lane.
 
 ## Real Fixture Corpus
 
@@ -276,6 +300,46 @@ Engine selection is now deliberately stricter than format detection:
 
 This means Hermes version churn or partial format breakage should reduce patch quality, but should not compromise patch correctness.
 
+### Hpatch-compatible output policy
+
+`chiff` now treats hpatch compatibility as an output-mode constraint, not as a
+patch-side feature. The format-aware algorithm may choose better cover lines, but
+the final hpatch-compatible artifact must apply to the original old bytes and
+reconstruct the original new bytes with an unmodified HDiffPatch / hpatch applier.
+
+The first internal seam is `build_hpatch_compatible_plan`, which maps `chiff`'s
+current `Copy/Insert` IR into HDiffPatch cover coordinates. The next serializer
+step should use HDiffPatch's `ICoverLinesListener` or an equivalent Rust
+serializer, while preserving the same patch-side compatibility contract.
+
+The cover-plan seam now also exposes a cost floor through
+`HpatchCompatiblePlan::stats`:
+
+- `cover_count`
+- `covered_bytes`
+- `uncovered_new_bytes`
+
+These values are useful for policy selection, but they are not a final serialized
+patch-size estimate. HDiffPatch may still add metadata, encode sub-diffs, and
+compress streams differently from this floor.
+
+### Native output policy
+
+The native `chiff` output lane is allowed to pursue the theoretical upper bound
+with a custom format, but it must be opt-in. This lane may introduce
+Hermes-specific operations, section/function manifests, symbolic references,
+canonicalized comparison views, and custom validation metadata.
+
+The key rule is separation: an optimization can be shared only if it can still
+emit original-byte hpatch cover lines. If it requires patch-side Hermes knowledge
+or reverse transforms, it belongs to the native lane.
+
+This rule is represented in code by `OptimizationCompatibility`:
+
+- `OriginalByteCover` optimizations are allowed in both hpatch-compatible and
+  native output modes.
+- `NativeOnly` optimizations are rejected from the hpatch-compatible output mode.
+
 ## What Is Implemented Today
 
 The following milestones are complete:
@@ -297,6 +361,9 @@ The following milestones are complete:
 - support for real-world overflowed Hermes function headers where bytecode offsets are non-monotonic or duplicated across headers
 - parsing of global Hermes `debug_info` layout and function debug-data streams using the upstream serialized format
 - debug-info-aware diff that preserves unchanged filename tables, file regions, and per-function debug-data streams
+- hpatch-compatible cover-plan export from the current exact `Copy/Insert` patch IR
+- hpatch-compatible cover-plan cost-floor stats
+- explicit output-mode and optimization-compatibility classification
 - synthetic Criterion benchmark harness for text and Hermes diff/apply hot paths
 - Criterion mixed-corpus benchmark harness covering real text/Hermes pairs plus generic-binary and Hermes fallback pairs
 - Rust crate verification
@@ -351,15 +418,15 @@ The current implementation is deliberately conservative:
 `chiff` now parses the top-level `debug_info` layout, function debug-data stream
 boundaries, SLEB128 unit boundaries inside each stream, coarse source-location
 record boundaries, and the optional `address/line/column/statement/envIdx`
-field ranges inside records. However, it still does not parse the internal
+field ranges and decoded values inside records. However, it still does not parse the internal
 semantics of:
 
 - filename table entries
 - file-region mappings beyond raw entries
-- source-location field values beyond preserving field boundaries
+- value normalization rules that would rewrite equivalent records into a canonical form
 
 That means stream-level preservation is now finer-grained than before, but
-intra-stream optimization is still boundary-aware rather than value-normalizing.
+intra-stream optimization is still value-aware for anchoring rather than value-normalizing.
 
 ### 4. Text diff is still conservative
 
@@ -370,7 +437,34 @@ It now performs a conservative middle-anchor resync, but it still does not perfo
 - token-aware matching
 - multi-anchor / token-level re-synchronization
 
-### 4. Benchmarking is still limited
+### 5. Hpatch compatibility is not serialized yet
+
+`chiff` can now export hpatch cover-plan coordinates from its internal patch IR,
+but it does not yet emit a full HDiffPatch-compatible payload.
+
+The compatibility path still needs:
+
+- a serializer backend or HDiffPatch `ICoverLinesListener` bridge
+- a cover policy that compares `chiff` covers against hdiff-native covers
+- validation through the existing `hpatch_by_file` apply path
+
+The theoretical advantage over plain hdiff is cover selection, not container
+format. On arbitrary binary data, plain hdiff may still produce better covers.
+The hpatch-compatible mode must therefore be benchmark-gated against real
+React Native / Hermes corpora.
+
+### 6. Native format is not designed yet
+
+The native lane is now explicit as `PatchOutputMode::NativeChiff`, but the
+container is not specified yet. Open questions include:
+
+- section/function manifest layout
+- semantic operation set
+- compression strategy
+- apply-side validation and rollback
+- migration rules from hpatch-compatible artifacts
+
+### 7. Benchmarking is still limited
 
 We now have both:
 
@@ -413,9 +507,10 @@ Why it mattered:
 
 ### Stage 3: Function body substructure
 
-Next priority:
+Partially completed:
 
-- identify bytecode body vs jump table tail
+- identify bytecode instruction boundaries for supported Hermes 98/99 bodies
+- identify bytecode body vs switch-table tail for `UIntSwitchImm` and `StringSwitchImm`
 - preserve aligned jump-table regions separately when possible
 
 Why:
@@ -447,6 +542,24 @@ Add:
 - fixture corpus management
 - benchmark commands and report conventions
 - artifact reports comparing `chiff` to HDiffPatch / bsdiff / xdelta3 / zstd patch-from
+
+### Stage 7: Hpatch-compatible output
+
+For existing `react-native-update` clients:
+
+- feed `chiff` cover plans into HDiffPatch `ICoverLinesListener`
+- compare `chiff` covers, hdiff-native covers, and merged-costed covers
+- emit standard hpatch-compatible payloads
+- validate with the existing `hpatch_by_file` apply path
+
+### Stage 8: Native `chiff` format
+
+For opt-in maximum compression:
+
+- design a custom container separate from hpatch-compatible output
+- support Hermes section/function/debug-data operations directly
+- allow canonicalized comparison views with explicit reverse transforms
+- benchmark native output against both hpatch-compatible `chiff` and plain hdiff
 
 ## Validation Strategy
 
@@ -507,14 +620,22 @@ If new APIs are exposed to Node/Bun, they should come from crate-level stable fu
 
 The immediate next implementation step after this document is:
 
-1. Decide whether to split Hermes function bodies into finer structural subregions before opcode parsing.
-2. Add a benchmark harness so new structure-aware changes can be evaluated against patch size and runtime, not just correctness.
-3. Use those measurements to choose between opcode-aware Hermes refinement and text-diff refinement as the next branch.
-4. Use the mixed-corpus Criterion baseline before and after any Hermes/text optimization so patch-size收益和运行时回归都能在真实 fixture 上被观察到。
+1. Add the HDiffPatch listener bridge in `node-hdiffpatch` as a side-by-side
+   generation path, not a replacement for the current hdiff path.
+2. Validate generated hpatch-compatible payloads with
+   `check_single_compressed_diff` and the existing file-level `hpatch_by_file`
+   path.
+3. Add corpus reporting that compares `hdiff_native`, `chiff_structured`, and
+   eventually `merged_costed` output.
+4. Continue Hermes/text algorithm work only after each optimization is classified
+   as `OriginalByteCover` or `NativeOnly`.
+5. Start the native `chiff` container design separately, so native-only
+   transforms can pursue the upper bound without weakening hpatch compatibility.
 
 After that, the most valuable branch point is:
 
-- opcode-aware Hermes body refinement, or
-- benchmark harness and real corpus measurement
+- hpatch-compatible bridge implementation in `node-hdiffpatch`, or
+- native `chiff` container MVP
 
-That choice should be driven by evidence from real patch-size measurements, not by intuition alone.
+That choice should be driven by real patch-size, diff-time, apply-time, and
+rollback-risk measurements, not by intuition alone.

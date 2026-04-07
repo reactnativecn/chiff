@@ -1,7 +1,7 @@
 use chiff::{
-    analyze_diff, analyze_directory_pair, assess_structured_hermes, detect_input_format,
-    select_engine, select_engine_decision, CorpusEntryStatus, EngineDecision, HermesForm,
-    InputFormat, StructuredHermesSupport,
+    analyze_diff, analyze_directory_pair, assess_structured_hermes, build_hpatch_compatible_plan,
+    detect_input_format, select_engine, select_engine_decision, CorpusEntryStatus, EngineDecision,
+    HermesForm, HpatchCoverSelectionPolicy, InputFormat, StructuredHermesSupport,
 };
 use napi::bindgen_prelude::{Buffer, Result};
 use napi_derive::napi;
@@ -88,6 +88,25 @@ pub struct CorpusEntryResult {
 pub struct DirectoryAnalysisResult {
     pub entries: Vec<CorpusEntryResult>,
     pub summary: CorpusSummaryResult,
+}
+
+#[napi(object)]
+pub struct HpatchCoverResult {
+    pub old_pos: String,
+    pub new_pos: String,
+    pub len: String,
+}
+
+#[napi(object)]
+pub struct HpatchCompatiblePlanResult {
+    pub output_mode: String,
+    pub cover_policy: String,
+    pub old_size: String,
+    pub new_size: String,
+    pub cover_count: u32,
+    pub covered_bytes: String,
+    pub uncovered_new_bytes: String,
+    pub covers: Vec<HpatchCoverResult>,
 }
 
 fn engine_decision_result(decision: EngineDecision) -> EngineDecisionResult {
@@ -222,6 +241,36 @@ pub fn diff_stats(old_input: Buffer, new_input: Buffer) -> Result<DiffStatsResul
 #[napi]
 pub fn analyze_diff_result(old_input: Buffer, new_input: Buffer) -> Result<AnalyzeDiffResult> {
     Ok(build_analyze_diff_result(&old_input, &new_input))
+}
+
+#[napi]
+pub fn hpatch_compatible_plan_result(
+    old_input: Buffer,
+    new_input: Buffer,
+) -> Result<HpatchCompatiblePlanResult> {
+    let analysis = analyze_diff(&old_input, &new_input);
+    let plan = build_hpatch_compatible_plan(old_input.len(), &analysis.patch)
+        .map_err(|error| napi::Error::from_reason(format!("{error:?}")))?;
+    let stats = plan.stats();
+
+    Ok(HpatchCompatiblePlanResult {
+        output_mode: String::from(plan.output_mode().as_str()),
+        cover_policy: String::from(HpatchCoverSelectionPolicy::ChiffStructured.as_str()),
+        old_size: plan.old_size.to_string(),
+        new_size: plan.new_size.to_string(),
+        cover_count: stats.cover_count as u32,
+        covered_bytes: stats.covered_bytes.to_string(),
+        uncovered_new_bytes: stats.uncovered_new_bytes.to_string(),
+        covers: plan
+            .covers
+            .into_iter()
+            .map(|cover| HpatchCoverResult {
+                old_pos: cover.old_pos.to_string(),
+                new_pos: cover.new_pos.to_string(),
+                len: cover.len.to_string(),
+            })
+            .collect(),
+    })
 }
 
 #[napi]
