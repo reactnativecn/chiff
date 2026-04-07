@@ -349,15 +349,17 @@ The current implementation is deliberately conservative:
 ### 3. Debug-info semantics are still coarse
 
 `chiff` now parses the top-level `debug_info` layout, function debug-data stream
-boundaries, and SLEB128 unit boundaries inside each stream. However, it still
-does not parse the internal semantics of:
+boundaries, SLEB128 unit boundaries inside each stream, coarse source-location
+record boundaries, and the optional `address/line/column/statement/envIdx`
+field ranges inside records. However, it still does not parse the internal
+semantics of:
 
 - filename table entries
 - file-region mappings beyond raw entries
-- individual source-location records within a debug-data stream
+- source-location field values beyond preserving field boundaries
 
 That means stream-level preservation is now finer-grained than before, but
-intra-stream optimization is still only unit-aware rather than record-aware.
+intra-stream optimization is still boundary-aware rather than value-normalizing.
 
 ### 4. Text diff is still conservative
 

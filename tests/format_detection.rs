@@ -3,9 +3,10 @@ use chiff::format::{detect_input_format, HermesForm, InputFormat};
 use chiff::hermes::{
     assess_structured_hermes, can_use_structured_hermes, parse_artifact, parse_debug_info_layout,
     parse_function_layout, parse_header, parse_section_layout, supports_structured_hermes_version,
-    HermesArtifact, HermesDebugDataStream, HermesDebugFileRegion, HermesDebugInfoHeader,
-    HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock, HermesFunctionLayout,
-    HermesHeader, HermesSection, HermesSectionKind, HermesSectionLayout, StructuredHermesSupport,
+    HermesArtifact, HermesDebugDataRecord, HermesDebugDataStream, HermesDebugFileRegion,
+    HermesDebugInfoHeader, HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock,
+    HermesFunctionLayout, HermesHeader, HermesSection, HermesSectionKind, HermesSectionLayout,
+    StructuredHermesSupport,
 };
 
 const HERMES_MAGIC: u64 = 0x1F19_03C1_03BC_1FC6;
@@ -937,6 +938,18 @@ fn parses_hermes_debug_info_layout_and_streams() {
                     function_index: 7,
                     offset: 168,
                     end_offset: 176,
+                    header_segments: vec![168..169, 169..170, 170..171, 171..172],
+                    records: vec![HermesDebugDataRecord {
+                        offset: 172,
+                        end_offset: 175,
+                        address_delta: 172..173,
+                        line_delta: 173..174,
+                        column_delta: Some(174..175),
+                        statement_delta: None,
+                        env_idx_delta: None,
+                        segments: vec![172..173, 173..174, 174..175],
+                    }],
+                    terminal: 175..176,
                     segments: vec![
                         168..169,
                         169..170,
@@ -952,6 +965,18 @@ fn parses_hermes_debug_info_layout_and_streams() {
                     function_index: 11,
                     offset: 176,
                     end_offset: 184,
+                    header_segments: vec![176..177, 177..178, 178..179, 179..180],
+                    records: vec![HermesDebugDataRecord {
+                        offset: 180,
+                        end_offset: 183,
+                        address_delta: 180..181,
+                        line_delta: 181..182,
+                        column_delta: Some(182..183),
+                        statement_delta: None,
+                        env_idx_delta: None,
+                        segments: vec![180..181, 181..182, 182..183],
+                    }],
+                    terminal: 183..184,
                     segments: vec![
                         176..177,
                         177..178,

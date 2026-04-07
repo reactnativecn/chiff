@@ -959,6 +959,52 @@ fn diff_bytes_preserves_unchanged_debug_stream_tail_after_varint_length_shift() 
 }
 
 #[test]
+fn diff_bytes_resynchronizes_debug_stream_records_after_record_insertion() {
+    let old = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 1, 0, 1, 1, 0, 2, 1, 0, -1]),
+    );
+    let new = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 9, 1, 0, 8, 1, 0, 1, 1, 0, 7, 1, 0, -1]),
+    );
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 175 && offset.saturating_add(*len) >= 178
+        )
+    }));
+}
+
+#[test]
+fn diff_bytes_preserves_debug_record_env_field_when_statement_field_is_inserted() {
+    let old = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 5, 1, 9, 1, 1, 0, -1]),
+    );
+    let new = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 7, 1, 4, 9, 2, 1, 0, -1]),
+    );
+
+    let patch = diff_bytes(&old, &new);
+
+    assert_eq!(apply_patch(&old, &patch).unwrap(), new);
+    assert!(patch.ops.iter().any(|op| {
+        matches!(
+            op,
+            PatchOp::Copy { offset, len }
+                if *offset <= 175 && offset.saturating_add(*len) >= 176
+        )
+    }));
+}
+
+#[test]
 fn diff_bytes_preserves_common_prefix_and_suffix() {
     let old = b"abcXYZdef";
     let new = b"abc123def";

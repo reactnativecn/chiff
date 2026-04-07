@@ -552,6 +552,30 @@ fn bench_diff_hermes_debug_stream(c: &mut Criterion) {
     c.bench_function("diff/hermes-debug-stream-varint-shift", |b| {
         b.iter(|| diff_bytes(black_box(&old), black_box(&new)))
     });
+
+    let old_records = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 1, 0, 1, 1, 0, 2, 1, 0, -1]),
+    );
+    let new_records = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 9, 1, 0, 8, 1, 0, 1, 1, 0, 7, 1, 0, -1]),
+    );
+    c.bench_function("diff/hermes-debug-stream-record-anchor", |b| {
+        b.iter(|| diff_bytes(black_box(&old_records), black_box(&new_records)))
+    });
+
+    let old_field = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 5, 1, 9, 1, 1, 0, -1]),
+    );
+    let new_field = hermes_bytes_with_debug_info(
+        b"app\0",
+        &signed_leb128_bytes(&[7, 10, 3, 0, 0, 7, 1, 4, 9, 2, 1, 0, -1]),
+    );
+    c.bench_function("diff/hermes-debug-stream-record-field", |b| {
+        b.iter(|| diff_bytes(black_box(&old_field), black_box(&new_field)))
+    });
 }
 
 fn benchmark_diff_cases(c: &mut Criterion) {

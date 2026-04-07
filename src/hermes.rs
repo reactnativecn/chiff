@@ -185,10 +185,25 @@ pub struct HermesDebugFileRegion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesDebugDataRecord {
+    pub offset: u32,
+    pub end_offset: u32,
+    pub address_delta: std::ops::Range<u32>,
+    pub line_delta: std::ops::Range<u32>,
+    pub column_delta: Option<std::ops::Range<u32>>,
+    pub statement_delta: Option<std::ops::Range<u32>>,
+    pub env_idx_delta: Option<std::ops::Range<u32>>,
+    pub segments: Vec<std::ops::Range<u32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HermesDebugDataStream {
     pub function_index: u32,
     pub offset: u32,
     pub end_offset: u32,
+    pub header_segments: Vec<std::ops::Range<u32>>,
+    pub records: Vec<HermesDebugDataRecord>,
+    pub terminal: std::ops::Range<u32>,
     pub segments: Vec<std::ops::Range<u32>>,
 }
 
@@ -706,50 +721,95 @@ fn parse_debug_data_streams(
 
     while relative_offset < debug_data.len() {
         let stream_start = relative_offset;
+        let mut header_segments = Vec::new();
+        let mut records = Vec::new();
         let mut segments = Vec::new();
 
         let (function_index, function_index_range) =
             read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-        segments.push(to_absolute_u32_range(
-            debug_data_offset,
-            function_index_range,
-        )?);
+        let function_index_range = to_absolute_u32_range(debug_data_offset, function_index_range)?;
+        header_segments.push(function_index_range.clone());
+        segments.push(function_index_range);
         let function_index = u32::try_from(function_index).ok()?;
 
         for _ in 0..3 {
             let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-            segments.push(to_absolute_u32_range(debug_data_offset, range)?);
+            let range = to_absolute_u32_range(debug_data_offset, range)?;
+            header_segments.push(range.clone());
+            segments.push(range);
         }
 
-        loop {
+        let terminal = loop {
+            let record_start = relative_offset;
+            let mut record_segments = Vec::new();
+
             let (address_delta, address_delta_range) =
                 read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-            segments.push(to_absolute_u32_range(
-                debug_data_offset,
-                address_delta_range,
-            )?);
+            let address_delta_range =
+                to_absolute_u32_range(debug_data_offset, address_delta_range)?;
+            record_segments.push(address_delta_range.clone());
+            segments.push(address_delta_range);
             if address_delta == -1 {
-                break;
+                break to_absolute_u32_range(debug_data_offset, record_start..relative_offset)?;
             }
 
             let (line_delta, line_delta_range) =
                 read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-            segments.push(to_absolute_u32_range(debug_data_offset, line_delta_range)?);
+            let line_delta_range = to_absolute_u32_range(debug_data_offset, line_delta_range)?;
+            record_segments.push(line_delta_range.clone());
+            segments.push(line_delta_range);
             if (line_delta & 1) == 0 {
+                let offset = debug_data_offset.checked_add(u32::try_from(record_start).ok()?)?;
+                let end_offset =
+                    debug_data_offset.checked_add(u32::try_from(relative_offset).ok()?)?;
+                records.push(HermesDebugDataRecord {
+                    offset,
+                    end_offset,
+                    address_delta: record_segments[0].clone(),
+                    line_delta: record_segments[1].clone(),
+                    column_delta: None,
+                    statement_delta: None,
+                    env_idx_delta: None,
+                    segments: record_segments,
+                });
                 continue;
             }
 
             let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-            segments.push(to_absolute_u32_range(debug_data_offset, range)?);
+            let range = to_absolute_u32_range(debug_data_offset, range)?;
+            let column_delta = range.clone();
+            record_segments.push(range.clone());
+            segments.push(range);
+            let mut statement_delta = None;
             if (line_delta & 2) != 0 {
                 let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-                segments.push(to_absolute_u32_range(debug_data_offset, range)?);
+                let range = to_absolute_u32_range(debug_data_offset, range)?;
+                statement_delta = Some(range.clone());
+                record_segments.push(range.clone());
+                segments.push(range);
             }
+            let mut env_idx_delta = None;
             if (line_delta & 4) != 0 {
                 let (_, range) = read_signed_leb128_with_range(debug_data, &mut relative_offset)?;
-                segments.push(to_absolute_u32_range(debug_data_offset, range)?);
+                let range = to_absolute_u32_range(debug_data_offset, range)?;
+                env_idx_delta = Some(range.clone());
+                record_segments.push(range.clone());
+                segments.push(range);
             }
-        }
+
+            let offset = debug_data_offset.checked_add(u32::try_from(record_start).ok()?)?;
+            let end_offset = debug_data_offset.checked_add(u32::try_from(relative_offset).ok()?)?;
+            records.push(HermesDebugDataRecord {
+                offset,
+                end_offset,
+                address_delta: record_segments[0].clone(),
+                line_delta: record_segments[1].clone(),
+                column_delta: Some(column_delta),
+                statement_delta,
+                env_idx_delta,
+                segments: record_segments,
+            });
+        };
 
         let offset = debug_data_offset.checked_add(u32::try_from(stream_start).ok()?)?;
         let end_offset = debug_data_offset.checked_add(u32::try_from(relative_offset).ok()?)?;
@@ -757,6 +817,9 @@ fn parse_debug_data_streams(
             function_index,
             offset,
             end_offset,
+            header_segments,
+            records,
+            terminal,
             segments,
         });
     }

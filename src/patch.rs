@@ -4,9 +4,9 @@ use crate::{
         HERMES_V98_V99_OPCODE_SIZES, HERMES_V98_V99_STRING_SWITCH_IMM_OPCODE,
         HERMES_V98_V99_UINT_SWITCH_IMM_OPCODE,
     },
-    parse_artifact, select_engine_decision, EngineDecision, EngineKind, HermesDebugDataStream,
-    HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock, HermesSection,
-    HermesSectionKind, InputFormat, StructuredHermesSupport,
+    parse_artifact, select_engine_decision, EngineDecision, EngineKind, HermesDebugDataRecord,
+    HermesDebugDataStream, HermesDebugInfoLayout, HermesFunction, HermesFunctionInfoBlock,
+    HermesSection, HermesSectionKind, InputFormat, StructuredHermesSupport,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -625,25 +625,256 @@ fn build_debug_stream_diff(
     new_stream: &HermesDebugDataStream,
 ) -> Vec<PatchOp> {
     let mut ops = Vec::new();
-    let segment_count = old_stream.segments.len().max(new_stream.segments.len());
+    append_debug_segments_diff(
+        &mut ops,
+        old,
+        new,
+        &old_stream.header_segments,
+        &new_stream.header_segments,
+    );
+    append_debug_record_sequence_diff(&mut ops, old, new, &old_stream.records, &new_stream.records);
+    append_region_diff(
+        &mut ops,
+        old,
+        new,
+        old_stream.terminal.start as usize..old_stream.terminal.end as usize,
+        new_stream.terminal.start as usize..new_stream.terminal.end as usize,
+    );
+    ops
+}
+
+fn append_debug_segments_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_segments: &[std::ops::Range<u32>],
+    new_segments: &[std::ops::Range<u32>],
+) {
+    let segment_count = old_segments.len().max(new_segments.len());
     for index in 0..segment_count {
         append_region_diff(
-            &mut ops,
+            ops,
             old,
             new,
-            old_stream
-                .segments
+            old_segments
                 .get(index)
                 .map(|range| range.start as usize..range.end as usize)
                 .unwrap_or(0..0),
-            new_stream
-                .segments
+            new_segments
                 .get(index)
                 .map(|range| range.start as usize..range.end as usize)
                 .unwrap_or(0..0),
         );
     }
-    ops
+}
+
+fn append_debug_record_sequence_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_records: &[HermesDebugDataRecord],
+    new_records: &[HermesDebugDataRecord],
+) {
+    let mut old_start = 0usize;
+    let mut new_start = 0usize;
+
+    while old_start < old_records.len()
+        && new_start < new_records.len()
+        && debug_record_bytes_equal(old, new, &old_records[old_start], &new_records[new_start])
+    {
+        append_debug_record_diff(
+            ops,
+            old,
+            new,
+            Some(&old_records[old_start]),
+            Some(&new_records[new_start]),
+        );
+        old_start += 1;
+        new_start += 1;
+    }
+
+    let mut old_end = old_records.len();
+    let mut new_end = new_records.len();
+    while old_start < old_end
+        && new_start < new_end
+        && debug_record_bytes_equal(
+            old,
+            new,
+            &old_records[old_end - 1],
+            &new_records[new_end - 1],
+        )
+    {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    if let Some((old_anchor, new_anchor)) = find_debug_record_anchor(
+        old,
+        new,
+        &old_records[old_start..old_end],
+        &new_records[new_start..new_end],
+    ) {
+        append_debug_record_sequence_diff(
+            ops,
+            old,
+            new,
+            &old_records[old_start..old_start + old_anchor],
+            &new_records[new_start..new_start + new_anchor],
+        );
+        append_debug_record_diff(
+            ops,
+            old,
+            new,
+            Some(&old_records[old_start + old_anchor]),
+            Some(&new_records[new_start + new_anchor]),
+        );
+        append_debug_record_sequence_diff(
+            ops,
+            old,
+            new,
+            &old_records[old_start + old_anchor + 1..old_end],
+            &new_records[new_start + new_anchor + 1..new_end],
+        );
+    } else {
+        let middle_count = (old_end - old_start).max(new_end - new_start);
+        for index in 0..middle_count {
+            append_debug_record_diff(
+                ops,
+                old,
+                new,
+                old_records.get(old_start + index),
+                new_records.get(new_start + index),
+            );
+        }
+    }
+
+    for index in 0..old_records.len() - old_end {
+        append_debug_record_diff(
+            ops,
+            old,
+            new,
+            Some(&old_records[old_end + index]),
+            Some(&new_records[new_end + index]),
+        );
+    }
+}
+
+fn append_debug_record_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_record: Option<&HermesDebugDataRecord>,
+    new_record: Option<&HermesDebugDataRecord>,
+) {
+    match (old_record, new_record) {
+        (Some(old_record), Some(new_record)) => {
+            append_region_diff(
+                ops,
+                old,
+                new,
+                old_record.address_delta.start as usize..old_record.address_delta.end as usize,
+                new_record.address_delta.start as usize..new_record.address_delta.end as usize,
+            );
+            append_region_diff(
+                ops,
+                old,
+                new,
+                old_record.line_delta.start as usize..old_record.line_delta.end as usize,
+                new_record.line_delta.start as usize..new_record.line_delta.end as usize,
+            );
+            append_optional_debug_range_diff(
+                ops,
+                old,
+                new,
+                old_record.column_delta.as_ref(),
+                new_record.column_delta.as_ref(),
+            );
+            append_optional_debug_range_diff(
+                ops,
+                old,
+                new,
+                old_record.statement_delta.as_ref(),
+                new_record.statement_delta.as_ref(),
+            );
+            append_optional_debug_range_diff(
+                ops,
+                old,
+                new,
+                old_record.env_idx_delta.as_ref(),
+                new_record.env_idx_delta.as_ref(),
+            );
+        }
+        (Some(old_record), None) => append_region_diff(
+            ops,
+            old,
+            new,
+            old_record.offset as usize..old_record.end_offset as usize,
+            0..0,
+        ),
+        (None, Some(new_record)) => append_region_diff(
+            ops,
+            old,
+            new,
+            0..0,
+            new_record.offset as usize..new_record.end_offset as usize,
+        ),
+        (None, None) => {}
+    }
+}
+
+fn append_optional_debug_range_diff(
+    ops: &mut Vec<PatchOp>,
+    old: &[u8],
+    new: &[u8],
+    old_range: Option<&std::ops::Range<u32>>,
+    new_range: Option<&std::ops::Range<u32>>,
+) {
+    append_region_diff(
+        ops,
+        old,
+        new,
+        old_range
+            .map(|range| range.start as usize..range.end as usize)
+            .unwrap_or(0..0),
+        new_range
+            .map(|range| range.start as usize..range.end as usize)
+            .unwrap_or(0..0),
+    );
+}
+
+fn find_debug_record_anchor(
+    old: &[u8],
+    new: &[u8],
+    old_records: &[HermesDebugDataRecord],
+    new_records: &[HermesDebugDataRecord],
+) -> Option<(usize, usize)> {
+    let mut best = None;
+    let mut best_len = 0usize;
+
+    for (old_index, old_record) in old_records.iter().enumerate() {
+        for (new_index, new_record) in new_records.iter().enumerate() {
+            if !debug_record_bytes_equal(old, new, old_record, new_record) {
+                continue;
+            }
+            let len = old_record.end_offset.saturating_sub(old_record.offset) as usize;
+            if len > best_len {
+                best = Some((old_index, new_index));
+                best_len = len;
+            }
+        }
+    }
+
+    best
+}
+
+fn debug_record_bytes_equal(
+    old: &[u8],
+    new: &[u8],
+    old_record: &HermesDebugDataRecord,
+    new_record: &HermesDebugDataRecord,
+) -> bool {
+    old.get(old_record.offset as usize..old_record.end_offset as usize)
+        == new.get(new_record.offset as usize..new_record.end_offset as usize)
 }
 
 #[derive(Debug, Clone)]
