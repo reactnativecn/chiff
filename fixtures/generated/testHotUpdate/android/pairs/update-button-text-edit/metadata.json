@@ -1,0 +1,70 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "generated_by": "scripts/generate-testhotupdate-corpus.cjs",
+  "mutation": {
+    "name": "update-button-text-edit",
+    "file": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate/src/index.tsx",
+    "line": 132,
+    "from": "<Text style={styles.instructions}>点击这里检查更新</Text>",
+    "to": "<Text style={styles.instructions}>点击这里检查更新2</Text>"
+  },
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093751,
+      "sha256": "855d135e682faf9466a703e3cf1f81d944ff330e2cc90256950f678731a74e6e"
+    },
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697513,
+      "sha256": "3dabc195fae85339f688b6dec902b9f50d177ec0d34b76a169dc40fb584853f9"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697517,
+      "sha256": "2f3658409bac6f3d8447ddbf37e34c761da39b0347982a0560650b923aea26c1"
+    }
+  ],
+  "current_diff_stats": {
+    "text": {
+      "op_count": 3,
+      "copy_op_count": 2,
+      "insert_op_count": 1,
+      "copied_bytes": 2093750,
+      "inserted_bytes": 1
+    },
+    "hermes": {
+      "op_count": 26028,
+      "copy_op_count": 13019,
+      "insert_op_count": 13009,
+      "copied_bytes": 2663925,
+      "inserted_bytes": 33592
+    }
+  }
+}

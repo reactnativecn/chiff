@@ -223,8 +223,10 @@ cover before calling HDiffPatch.
 The first practical version is `native-coalesce`: keep HDiffPatch's own cover
 selection, then merge only adjacent native covers with identical old/new offset
 delta across a small gap. This is generic, does not require Hermes parsing, and
-already improved one real Hermes pair by `14` bytes. It should still be used
-behind costed selection until a broader corpus proves it has no regressions.
+already improved one real Hermes pair by `14` bytes. On the current generated
+`testHotUpdate` corpus it is smaller on 1 file, equal on 11 files, and larger on
+none. It should still be used behind costed selection until a broader corpus
+proves it has no regressions.
 
 ### 4. HDiffPatch Parameter Tuning
 
@@ -234,7 +236,47 @@ search, extension, and selection over raw bytes. Format knowledge is more likely
 to matter in approximate cover proposals and gap targeting than in global
 parameter changes.
 
-### 5. More Exact Structural Segmentation
+### 5. Zstd `--patch-from` Baseline
+
+Zstd's patch mode is a different model from hpatch-compatible output. According
+to the upstream zstd wiki, `--patch-from` treats the old file as a dictionary for
+compressing the new file, raises the dictionary limit to 2 GB, and can use the
+long-range match finder when needed:
+https://github.com/facebook/zstd/wiki/Zstandard-as-a-patching-engine
+
+That model is attractive for speed and as a native `chiff` compression backend,
+but it is not hpatch-compatible. A zstd patch requires zstd dictionary
+decompression on the patch side:
+
+```bash
+zstd --patch-from=<oldfile> <newfile> -o <patchfile>
+zstd -d --patch-from=<oldfile> <patchfile> -o <newfile>
+```
+
+On the current generated `testHotUpdate` corpus, the size baseline is not
+competitive with native hdiff for small OTA bundle changes:
+
+| Engine | Total patch bytes |
+| --- | ---: |
+| native hdiff | 37380 |
+| zstd `-3 --patch-from` | 324437 |
+| zstd `-19 --patch-from` | 125637 |
+| current hpatch-compatible costed selection | 35989 |
+
+The high-churn `test-id-edit` Hermes pair shows the same pattern:
+
+| Engine | Patch bytes |
+| --- | ---: |
+| native hdiff | 31840 |
+| zstd `-19 --patch-from` | 80416 |
+| zstd `--ultra -22 --patch-from` | 79964 |
+| approximate hpatch merge | 30463 |
+
+So zstd is useful as a speed-oriented baseline and potential native-format
+compression component, but it should not replace hdiff in the hpatch-compatible
+lane for the current React Native / Hermes OTA workload.
+
+### 6. More Exact Structural Segmentation
 
 More exact segmentation is lower priority for hpatch-compatible output. It helps
 the future native `chiff` format and internal diagnostics, but in hpatch mode it
@@ -268,10 +310,19 @@ can represent transformations hpatch cannot:
 
 ## Next Experiment
 
-1. Expand the real corpus and measure `native-coalesce` across more Hermes and
-   text bundle pairs.
-2. Move `native-coalesce` into the costed CLI policy only if broader corpus
-   results stay non-regressive.
-3. Continue approximate Hermes-specific planning only after adding a
-   serialized-cost gate; the coarse section/body approximate planner did not
-   beat native HDiffPatch on the current real pair.
+1. Expand the real corpus and keep measuring `native-coalesce` across more
+   Hermes and text bundle pairs. It is currently non-regressive on the generated
+   `testHotUpdate` corpus, but the absolute win is small.
+2. Keep `native-coalesce` in the opt-in costed CLI policy because it is cheap and
+   preserves the native hdiff cover search.
+3. Prefer coarse approximate Hermes covers over exact structured covers for the
+   next hpatch-compatible experiments. The `test-id-edit` Hermes pair improved
+   from 31840 bytes to 30463 bytes when approximate covers were merged into
+   native gaps, while exact structured covers were much worse and slow.
+4. Keep approximate Hermes covers serialized-costed. The current generated
+   corpus shows approximate merge is smaller on 1 file, equal on 7 files, and
+   larger on 4 files; costed selection is 35989 bytes versus 37380 bytes for
+   native hdiff.
+5. Keep exact structured covers behind an explicit opt-in flag only. They are
+   useful for diagnostics and native-format research, but not for default hpatch
+   compatibility.

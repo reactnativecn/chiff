@@ -1,0 +1,70 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "generated_by": "scripts/generate-testhotupdate-corpus.cjs",
+  "mutation": {
+    "name": "test-id-edit",
+    "file": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate/src/index.tsx",
+    "line": 136,
+    "from": "testID=\"testcase\"",
+    "to": "testID=\"testcase-v2\""
+  },
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093753,
+      "sha256": "f71c5513ca70dee923e4d7aca53663452cfae08242993e987e90b4db3edf341e"
+    },
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697502,
+      "sha256": "0cae84329fbb1558007790d27265c82c916cdcf8b4269648044c8f128c047126"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697526,
+      "sha256": "ff611f9e863cb8b9e471a199cbca60ee081ca626811b64152e821976eff300fb"
+    }
+  ],
+  "current_diff_stats": {
+    "text": {
+      "op_count": 25,
+      "copy_op_count": 13,
+      "insert_op_count": 12,
+      "copied_bytes": 2093739,
+      "inserted_bytes": 14
+    },
+    "hermes": {
+      "op_count": 44189,
+      "copy_op_count": 23049,
+      "insert_op_count": 21140,
+      "copied_bytes": 2213404,
+      "inserted_bytes": 96442
+    }
+  }
+}

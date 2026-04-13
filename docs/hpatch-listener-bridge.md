@@ -81,21 +81,27 @@ patch side does not need to change.
 
 ## Policy
 
-The compatible bridge now supports three serialized candidates:
+The compatible bridge now supports these serialized candidates:
 
 - `hdiff_native`: no listener, current behavior.
 - `chiff_structured`: replace HDiffPatch's computed covers with `chiff` covers.
 - `merged_costed`: preserve HDiffPatch's native covers and insert `chiff` covers
   only into uncovered new-file gaps before serialization.
+- `chiff_approx_merged`: preserve HDiffPatch's native covers and insert coarse
+  Hermes approximate covers into uncovered new-file gaps.
 - `native-coalesce`: preserve HDiffPatch's native cover selection but coalesce
   adjacent native covers with the same old/new offset delta across small gaps.
 
-The current `chiff` crate exports structured cover plans, and the
-`node-hdiffpatch` bridge implements replacement, merge injection, and native
-coalescing modes. Production default should not switch to these blindly. They
-are currently opt-in because HDiffPatch's approximate raw-byte covers may beat
-`chiff`'s exact covers on real Hermes inputs, and some structured planning paths
-are still too slow for server defaults.
+The current `chiff` crate exports exact structured and coarse approximate cover
+plans, and the `node-hdiffpatch` bridge implements replacement, merge injection,
+and native coalescing modes. Production default should not switch to these
+blindly. They are currently opt-in because HDiffPatch's approximate raw-byte
+covers may beat `chiff`'s exact covers on real Hermes inputs, and exact
+structured planning paths are still too slow for server defaults.
+
+The CLI costed policy should try `native-coalesce` first, then coarse
+approximate merge when the native hdiff payload is above the configured
+threshold. Exact structured covers require an explicit opt-in flag.
 
 ## Compatibility Constraints
 

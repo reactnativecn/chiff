@@ -30,6 +30,34 @@ const pairs = {
     to: '<Text testID="bundle-label">bundleLabelV2: {bundleLabel}</Text>',
     summary: 'Minimal ASCII UI text change in the bundle-label element.',
   },
+  'camera-button-text-edit': {
+    title: 'camera-button-text-edit',
+    file: 'src/index.tsx',
+    from: '<Button onPress={() => setShowCamera(true)}>打开相机</Button>',
+    to: '<Button onPress={() => setShowCamera(true)}>打开相机2</Button>',
+    summary: 'Minimal text change in the camera button element.',
+  },
+  'update-button-text-edit': {
+    title: 'update-button-text-edit',
+    file: 'src/index.tsx',
+    from: '<Text style={styles.instructions}>点击这里检查更新</Text>',
+    to: '<Text style={styles.instructions}>点击这里检查更新2</Text>',
+    summary: 'Minimal text change in the update check button element.',
+  },
+  'snackbar-color-edit': {
+    title: 'snackbar-color-edit',
+    file: 'src/index.tsx',
+    from: "<Text style={{ color: 'white' }}>",
+    to: "<Text style={{ color: 'black' }}>",
+    summary: 'Minimal style string change in the update snackbar text.',
+  },
+  'test-id-edit': {
+    title: 'test-id-edit',
+    file: 'src/index.tsx',
+    from: 'testID="testcase"',
+    to: 'testID="testcase-v2"',
+    summary: 'Minimal testID string change in the hidden test console trigger.',
+  },
 };
 
 function printUsageAndExit() {

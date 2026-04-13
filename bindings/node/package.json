@@ -17,6 +17,10 @@
     "corpus:stats:bun": "npm run build:debug && bun ./scripts/corpus-diff-stats.cjs",
     "hpatch:report:node": "npm run build:debug && node ./scripts/hpatch-policy-report.cjs",
     "hpatch:report:bun": "npm run build:debug && bun ./scripts/hpatch-policy-report.cjs",
+    "hpatch:coalesce:node": "npm run build:debug && node ./scripts/hpatch-native-coalesce-report.cjs",
+    "hpatch:coalesce:bun": "npm run build:debug && bun ./scripts/hpatch-native-coalesce-report.cjs",
+    "zstd:report:node": "npm run build:debug && node ./scripts/zstd-hdiff-report.cjs",
+    "zstd:report:bun": "npm run build:debug && bun ./scripts/zstd-hdiff-report.cjs",
     "test:node": "npm run build:debug && node ./test/detect-format.test.cjs",
     "test:bun": "npm run build:debug && bun ./test/detect-format.test.cjs"
   }

@@ -463,29 +463,39 @@ It now performs a conservative middle-anchor resync, but it still does not perfo
 HDiffPatch-compatible payload. `react-native-update-cli` can use that path inside
 the existing `hdiff` commands when both `@chiff/node` and the enhanced
 `node-hdiffpatch` are available. The current CLI integration is opt-in and
-costed: `RNU_CHIFF_HPATCH_POLICY=costed` generates native hdiff, `chiff` cover
-replacement, and merged native-plus-`chiff` hpatch payloads, then keeps the
-smallest payload. The default path still uses native hdiff only. Even in
-`costed` mode, the CLI skips structured planning when the native hdiff payload
-is below `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`, which defaults to 4096 bytes.
-The current report also evaluates `native-coalesce`, a cheaper hpatch-compatible
-candidate that post-processes HDiffPatch's native covers without requiring a
-Hermes structured plan.
+costed: `RNU_CHIFF_HPATCH_POLICY=costed` generates native hdiff, tries
+`native-coalesce`, and then tries coarse approximate Hermes covers merged into
+native gaps when the native payload is large enough. The default path still uses
+native hdiff only. Even in `costed` mode, the CLI skips approximate and exact
+structured planning when the native hdiff payload is below
+`RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES`, which defaults to 4096 bytes. Exact
+structured covers require `RNU_CHIFF_HPATCH_EXACT_COVERS=1` because they can be
+slow and regressive on real Hermes inputs.
 
 The compatibility path still needs:
 
-- broader corpus reports before making `chiff_structured` the unconditional
-  default
+- broader corpus reports before making any hpatch-compatible enhancement a
+  server default
 - more corpus validation for the current `merged_costed` candidate, which can
   combine hdiff-native covers and `chiff` covers while still emitting a standard
   hpatch payload
 - more corpus validation for `native-coalesce`; it improves the
-  `bundle-label-copy-edit` real Hermes pair from 857 to 843 bytes but is neutral
-  on the current mixed corpus
-- a faster hpatch-compatible planner, because the `bundle-label-copy-edit` real
-  Hermes pair currently spends about 137s in `chiff_structured` planning; merge
-  avoids the serialized-size blow-up on that pair, but it cannot avoid the
-  planner cost
+  `bundle-label-copy-edit` real Hermes pair from 797 to 783 bytes and is neutral
+  on the other current generated pairs
+- more validation for coarse approximate Hermes covers; the `test-id-edit`
+  Hermes pair improves from 31840 to 30463 bytes when approximate covers are
+  merged into native gaps, but approximate merge is still larger on 4 of the 12
+  current generated files when used unconditionally
+- serialized costed selection across native hdiff, `native-coalesce`, and
+  approximate merge; the current generated corpus improves from 37380 to 35989
+  bytes only because the selector keeps native hdiff on 10 files
+- zstd `--patch-from` remains a speed-oriented baseline, not the hpatch
+  compatible default; on the current generated corpus zstd `-19` totals 125637
+  bytes versus 37380 bytes for native hdiff and 35989 bytes for costed
+  hpatch-compatible selection
+- a faster exact structured planner or a decision to keep exact structured
+  covers as diagnostics-only for hpatch mode; exact covers can explode
+  serialized size and planning time on real Hermes pairs
 - threshold tuning for `RNU_CHIFF_HPATCH_MIN_NATIVE_BYTES` across a larger
   corpus, because small native hdiff patches have little room for meaningful
   structured-cover wins

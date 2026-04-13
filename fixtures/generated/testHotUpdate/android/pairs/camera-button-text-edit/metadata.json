@@ -1,0 +1,70 @@
+{
+  "source_project": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate",
+  "platform": "android",
+  "generated_by": "scripts/generate-testhotupdate-corpus.cjs",
+  "mutation": {
+    "name": "camera-button-text-edit",
+    "file": "/Users/sunny/Documents/workspace/react-native-update/Example/testHotUpdate/src/index.tsx",
+    "line": 75,
+    "from": "<Button onPress={() => setShowCamera(true)}>打开相机</Button>",
+    "to": "<Button onPress={() => setShowCamera(true)}>打开相机2</Button>"
+  },
+  "artifacts": [
+    {
+      "variant": "v1",
+      "path": "v1/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093750,
+      "sha256": "83199c72feb8d5bc43e350dc76e04363cbaa5833bdaed1ad9265cbf514c91aa6"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/text/index.android.bundle",
+      "format": {
+        "kind": "text_utf8"
+      },
+      "size_bytes": 2093751,
+      "sha256": "cb316cb292d7cd0d29fecb8e70444323fab8fd1434a232466def54488da0be83"
+    },
+    {
+      "variant": "v1",
+      "path": "v1/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697513,
+      "sha256": "7fa712a3663aa4345572db0cec87e50de77dbd54a8f63eb99925916bee392fb1"
+    },
+    {
+      "variant": "v2",
+      "path": "v2/hermes/index.android.hbc",
+      "format": {
+        "kind": "hermes_bytecode",
+        "version": 98,
+        "form": "execution"
+      },
+      "size_bytes": 2697513,
+      "sha256": "be34f280abe1f5fd712ae27fa2d767ebede47a25808602f71fd1347e4af58c16"
+    }
+  ],
+  "current_diff_stats": {
+    "text": {
+      "op_count": 3,
+      "copy_op_count": 2,
+      "insert_op_count": 1,
+      "copied_bytes": 2093750,
+      "inserted_bytes": 1
+    },
+    "hermes": {
+      "op_count": 39,
+      "copy_op_count": 20,
+      "insert_op_count": 19,
+      "copied_bytes": 2697318,
+      "inserted_bytes": 195
+    }
+  }
+}
